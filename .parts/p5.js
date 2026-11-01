@@ -534,6 +534,7 @@
     if (/[^\x21-\x7E]/.test(key) || /[…]/.test(key)) throw new Error('APIキーに使えない文字（「…」や全角文字など）が含まれています。Google AI Studio のコピーボタンでキーをコピーし直して貼り付けてください。');
     if (!navigator.onLine) throw new Error('オフラインです。インターネットに接続してから送信してください。');
     const body = { contents, generationConfig: { maxOutputTokens: opts.maxTokens || 8192 } };
+    if (opts.thinking !== false) body.generationConfig.thinkingConfig = { thinkingLevel: 'low' }; // 考える時間を短くして速く返す
     if (opts.json) body.generationConfig.responseMimeType = 'application/json';
     if (opts.system) body.systemInstruction = { parts: [{ text: opts.system }] };
     const tryModels = [model, ...AI_FALLBACKS.filter((m) => m !== model)];
@@ -550,6 +551,7 @@
       }
       if (tmr) clearTimeout(tmr);
       j = null; try { j = await res.json(); } catch (e) { j = null; }
+      if (res.status === 400 && body.generationConfig.thinkingConfig && /thinking/i.test(JSON.stringify(j || ''))) { delete body.generationConfig.thinkingConfig; i--; continue; } // 考える設定に未対応のモデル → 外して再送
       if (res.status === 404 && i < tryModels.length - 1) continue; // モデルが使えない → 次の候補へ自動で切り替え
       if (res.ok && tryModels[i] !== ai.model && AI_MODELS[tryModels[i]] && !opts.key) { ai.model = tryModels[i]; try { saveAi(); } catch (e) {} }
       break;
@@ -666,7 +668,7 @@
     if (!key) { msg.textContent = 'APIキーを貼り付けてください'; return; }
     btn.disabled = true; msg.textContent = '接続を確認しています…';
     try {
-      await callGemini([{ role: 'user', parts: [{ text: '接続テストです。「OK」とだけ返してください。' }] }], { key, model, maxTokens: 256, allowEmpty: true, timeoutMs: 25000 });
+      await callGemini([{ role: 'user', parts: [{ text: '接続テストです。「OK」とだけ返してください。' }] }], { key, model: 'gemini-flash-lite-latest', maxTokens: 256, allowEmpty: true, timeoutMs: 30000 });
       ai.key = key; ai.model = model; saveAi();
       msg.textContent = '✓ 接続できました（キーを保存しました）';
       toast('Gemini と接続できました ✓');

@@ -406,7 +406,7 @@ with sync_playwright() as p:
     pg.click('#aiTestBtn'); wait_idle(pg, 800)
     check('接続テスト：成功でキー保存', '接続できました' in pg.inner_text('#aiMsg') and S(pg, 'LifePlan.ai.hasKey'), pg.inner_text('#aiMsg'))
     u, hdr, b = gem.reqs[-1]
-    check('API：キーはヘッダー（URLに入れない）', hdr.get('x-goog-api-key') == GKEY and GKEY not in u and 'key=' not in u and u.startswith('https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent'), u)
+    check('API：キーはヘッダー（URLに入れない）', hdr.get('x-goog-api-key') == GKEY and GKEY not in u and 'key=' not in u and u.startswith('https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent'), u)
     pg.evaluate('window.scrollTo(0,0)'); pg.evaluate("document.getElementById('aiCard').scrollIntoView({block:'start'})"); wait_idle(pg, 200)
     shot(pg, 'sp_settings_ai.png')
     ls = pg.evaluate("localStorage.getItem('lifeplan.ai')")

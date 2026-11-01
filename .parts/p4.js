@@ -77,6 +77,8 @@
     const r = route();
     const y = window.scrollY;
     main.innerHTML = VIEWS[r.name](r.arg);
+    updateTopPomu();
+    hydratePhotos(main);
     $$('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === r.name));
     const n = state.items.filter((i) => i.list === 'inbox' && i.status !== 'done').length;
     const badge = $('#inboxBadge'); badge.hidden = !n; badge.textContent = n > 99 ? '99+' : n;
@@ -109,6 +111,26 @@
   }
   window.addEventListener('resize', () => moveTabIndicator(false));
   window.addEventListener('scroll', () => { document.body.classList.toggle('scrolled', window.scrollY > 8); }, { passive: true });
+  // トップバーの中央：いちばん育っている ぽむ（同じレベルなら最近スタンプした目標）
+  function topPomu() {
+    let best = null;
+    state.habits.forEach((h) => {
+      const i = pomuInfo(h);
+      const last = h.done.length ? h.done[h.done.length - 1] : '';
+      if (!best || i.lv > best.lv || (i.lv === best.lv && last > best.last)) best = { h, lv: i.lv, last, key: i.key, name: i.name };
+    });
+    return best || { h: null, lv: 1, last: '', key: 'stage-1', name: POMU['stage-1'].name };
+  }
+  function updateTopPomu() {
+    const img = $('#topPomu'); if (!img) return;
+    const p = topPomu();
+    const src = pomuImg(p.key, true);
+    if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+    img.dataset.key = p.key;
+    const a = img.closest('a');
+    if (a) { a.setAttribute('aria-label', p.h ? `${p.name}（Lv.${p.lv}・${p.h.name}）：習慣スタンプへ` : 'ぽむたま：習慣スタンプへ'); a.title = p.h ? `${p.name} Lv.${p.lv}` : 'ぽむたま'; }
+    img.alt = p.name;
+  }
   // ドロワー（ハンバーガーメニュー）
   const drawer = $('#drawer'); const drawerBd = $('#drawerBackdrop');
   function openDrawer() {
@@ -126,6 +148,97 @@
   }
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && document.body.classList.contains('drawer-open')) closeDrawer(); });
   drawer.addEventListener('click', (e) => { if (e.target.closest('a[href]')) closeDrawer(); });
+  // スワイプ：右から左へなぞるとメニューが出る／左から右へで閉じる（指に合わせて動く）
+  const isDrawerOpen = () => document.body.classList.contains('drawer-open');
+  function swipeBlocked(t) {
+    if (!t || !t.closest) return true;
+    if (t.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"], .modal-backdrop:not([hidden]), .photo-viewer, .pomu-celebrate')) return true;
+    if (!backdrop.hidden) return true;
+    for (let el = t; el && el !== document.body; el = el.parentElement) {
+      if (el.scrollWidth > el.clientWidth + 2) { const ox = getComputedStyle(el).overflowX; if (ox === 'auto' || ox === 'scroll') return true; }
+    }
+    return false;
+  }
+  const sw = { on: false, x: 0, y: 0, t: 0, lock: '', open: false, w: 0 };
+  function swipeReset() { drawer.style.transform = ''; drawer.style.transition = ''; drawerBd.style.opacity = ''; drawerBd.style.transition = ''; document.body.classList.remove('drawer-dragging'); }
+  document.addEventListener('touchstart', (e) => {
+    sw.on = false;
+    if (e.touches.length !== 1 || window.matchMedia('(min-width: 960px)').matches) return;
+    const open = isDrawerOpen();
+    if (!open && swipeBlocked(e.target)) return;
+    const p = e.touches[0];
+    Object.assign(sw, { on: true, x: p.clientX, y: p.clientY, t: Date.now(), lock: '', open, w: drawer.offsetWidth || 300 });
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (!sw.on) return;
+    const p = e.touches[0]; const dx = p.clientX - sw.x; const dy = p.clientY - sw.y;
+    if (!sw.lock) {
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+      sw.lock = Math.abs(dx) > Math.abs(dy) * 1.5 && (sw.open ? dx > 0 : dx < 0) ? 'h' : 'v';
+      if (sw.lock === 'h') {
+        if (!sw.open) { drawerBd.hidden = false; drawer.removeAttribute('inert'); }
+        drawer.style.transition = 'none'; drawerBd.style.transition = 'none'; document.body.classList.add('drawer-dragging');
+      }
+    }
+    if (sw.lock !== 'h') return;
+    const off = sw.open ? Math.max(0, Math.min(sw.w, dx)) : Math.max(0, Math.min(sw.w, sw.w + dx)); // 0 = 全開
+    drawer.style.transform = `translateX(${off}px)`;
+    drawerBd.style.opacity = String(1 - off / sw.w);
+  }, { passive: true });
+  function swipeEnd(e) {
+    if (!sw.on) return;
+    sw.on = false;
+    const p = (e.changedTouches && e.changedTouches[0]) || { clientX: sw.x, clientY: sw.y };
+    const dx = p.clientX - sw.x; const dy = p.clientY - sw.y;
+    const horiz = Math.abs(dx) > Math.abs(dy) * 1.5;
+    const fast = Date.now() - sw.t < 300 && Math.abs(dx) > 30;
+    const dragged = sw.lock === 'h';
+    let act = '';
+    if (e.type !== 'touchcancel') {
+      if (!sw.open && horiz && (dx < -60 || (fast && dx < 0) || (dragged && dx < -sw.w / 3))) act = 'open';
+      else if (sw.open && horiz && (dx > 60 || (fast && dx > 0) || (dragged && dx > sw.w / 3))) act = 'close';
+    }
+    if (act === 'open') { document.body.classList.add('drawer-open'); openDrawer(); }
+    if (act === 'close') closeDrawer();
+    if (dragged) swipeReset(); // 指を離した位置から、続きをアニメーション
+    if (dragged && !sw.open && act !== 'open') { drawer.setAttribute('inert', ''); setTimeout(() => { if (!isDrawerOpen()) drawerBd.hidden = true; }, 320); }
+  }
+  document.addEventListener('touchend', swipeEnd, { passive: true });
+  document.addEventListener('touchcancel', swipeEnd, { passive: true });
+  // 「アップデート」：最新版を取りに行き、キャッシュを消して読み込み直す（データは localStorage にあるので消えない）
+  let updating = false;
+  async function forceUpdate() {
+    if (updating) return;
+    updating = true;
+    toast('最新版を確認しています…');
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    try {
+      if (sync.connected && sync.dirty && navigator.onLine) await Promise.race([syncNow(), wait(4000)]); // 未送信の変更を先に保存
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(async (reg) => {
+          try { await reg.update(); } catch (e) { /* オフラインなど */ }
+          const w = reg.waiting || reg.installing;
+          if (w) w.postMessage('skipWaiting');
+        }));
+      }
+      if (window.caches) { const keys = await caches.keys(); await Promise.all(keys.map((k) => caches.delete(k))); }
+    } catch (e) { /* 失敗しても読み込み直す */ }
+    try { sessionStorage.setItem('lifeplan.updated', APP_VERSION); } catch (e) { /* noop */ }
+    await wait(500);
+    const u = new URL(location.href);
+    u.searchParams.set('v', String(Date.now()));
+    location.replace(u.toString());
+  }
+  // アップデート後：URL の ?v= を消して、バージョンを知らせる
+  function afterUpdate() {
+    let prev = null; try { prev = sessionStorage.getItem('lifeplan.updated'); sessionStorage.removeItem('lifeplan.updated'); } catch (e) { /* noop */ }
+    if (/[?&]v=/.test(location.search)) {
+      const u = new URL(location.href); u.searchParams.delete('v');
+      try { history.replaceState(history.state, '', u.pathname + u.search + u.hash); } catch (e) { /* noop */ }
+    }
+    if (prev) setTimeout(() => toast(prev === APP_VERSION ? `最新版です（バージョン ${APP_VERSION}）` : `バージョン ${APP_VERSION} に更新しました ✓`), 300);
+  }
   // 同期などバックグラウンドの更新：入力中・モーダル表示中は描画を後回し
   function rerenderSoft() {
     const a = document.activeElement;
@@ -309,27 +422,35 @@
   function openJournalEditor(id) {
     const e = id ? state.journal.find((x) => x.id === id) : null;
     const v = e || { date: todayStr(), text: '', mood: 3, linked: [] };
+    startJournalEdit(e);
     const candidates = state.items.filter((i) => i.status !== 'done' || v.linked.includes(i.id)).sort((a, b) => (v.linked.includes(b.id) - v.linked.includes(a.id)) || b.updatedAt.localeCompare(a.updatedAt));
     openModal(`${modalHead(e ? 'ジャーナルを編集' : 'ジャーナルを書く')}
       <form data-form="journal" data-id="${e ? e.id : ''}">
         <label class="field"><span class="field-label">日付</span><input type="date" name="date" value="${esc(v.date)}" required></label>
         <div class="field"><span class="field-label">気分</span><div class="mood-pick">${[1, 2, 3, 4, 5].map((n) => `<label title="${MOOD_LABEL[n]}"><input type="radio" name="mood" value="${n}" ${Number(v.mood) === n ? 'checked' : ''}><span>${MOODS[n]}<small>${n}</small></span></label>`).join('')}</div></div>
         <label class="field"><span class="field-label">内容</span><textarea name="text" rows="6" placeholder="今日あったこと、考えたこと、気づいたこと…" ${e ? '' : 'autofocus'}>${esc(v.text)}</textarea></label>
+        <div class="field j-photo-field"><span class="field-label">写真（任意）<small class="muted" id="jPhotoCount">${jEdit.photos.length ? jEdit.photos.length + '枚' : ''}</small></span>
+          <div id="jPhotoBox">${photoThumbs(jEdit.photos, '', true)}</div>
+          <label class="btn soft small photo-add">📷 写真を追加<input type="file" id="jPhotoInput" accept="image/*" multiple hidden data-change="journalEntryPhoto"></label>
+          <p class="muted small">長い辺1280pxに縮小してこの端末に保存します。GitHub 同期中は非公開のデータリポジトリにも保存し、他の端末でも見られます。</p></div>
         ${candidates.length ? `<div class="field"><span class="field-label">関連するタスク（任意）</span>
           <input class="link-filter" placeholder="絞り込み" data-input="linkFilter" aria-label="タスクを絞り込み">
           <div class="link-list">${candidates.map((i) => `<label class="link-opt" data-title="${esc(i.title.toLowerCase())}"><input type="checkbox" name="linked" value="${i.id}" ${v.linked.includes(i.id) ? 'checked' : ''}><span>${esc(i.title)}</span><small>${LISTS[i.list]}</small></label>`).join('')}</div></div>` : ''}
         <div class="btn-row between">${e ? `<button type="button" class="btn ghost danger" data-action="deleteJournal" data-id="${e.id}">削除</button>` : '<span></span>'}
           <span class="btn-row"><button type="button" class="btn ghost" data-action="closeModal">キャンセル</button><button class="btn primary" type="submit">保存</button></span></div>
-      </form>`);
+      </form>`, { onOpen: (box) => hydratePhotos(box), onClose: () => endJournalEdit() });
   }
   function submitJournal(form) {
     const fd = new FormData(form);
     const text = String(fd.get('text') || '').trim();
-    if (!text) { toast('内容を入力してください'); return; }
-    const data = { date: fd.get('date') || todayStr(), text, mood: Number(fd.get('mood')) || 0, linked: fd.getAll('linked').map(String) };
+    if (jEdit.busy) { toast('写真を処理しています。少し待ってから保存してください'); return; }
+    if (!text && !jEdit.photos.length) { toast('内容を入力してください'); return; }
     const e = state.journal.find((x) => x.id === form.dataset.id);
+    const data = { date: isDateStr(String(fd.get('date'))) ? String(fd.get('date')) : todayStr(), text, mood: Number(fd.get('mood')) || 0, linked: fd.getAll('linked').map(String) };
+    data.photos = commitEditorPhotos(e ? e.photos : []);
     if (e) Object.assign(e, data, { updatedAt: nowIso() });
     else state.journal.push(normJournal(data));
+    ui.journalOpen.add(data.date);
     data.linked.forEach((id) => { const it = getItem(id); if (it) touch(it, true); }); // ジャーナルで触れた＝進捗あり
     save(); closeModal(); rerender(); toast('ジャーナルを保存しました');
   }

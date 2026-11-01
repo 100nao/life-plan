@@ -17,12 +17,15 @@ class FakeGH:
         self.puts = []
         self.calls = []
         self.auth = []
+        self.bins = {}  # 写真（バイナリ）path -> (bytes, sha)
+        self.private = True
+        self.deletes = []
     def set(self, path, text):
         self.files[path] = (text, hashlib.sha1((text + str(time.time())).encode()).hexdigest())
     def get_json(self, path):
         return json.loads(self.files[path][0]) if path in self.files else None
     def handle(self, route, request):
-        cors = {'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': 'GET,PUT,OPTIONS', 'Content-Type': 'application/json'}
+        cors = {'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': 'GET,PUT,DELETE,OPTIONS', 'Content-Type': 'application/json'}
         if request.method == 'OPTIONS':
             return route.fulfill(status=204, headers=cors)
         u = request.url
@@ -35,7 +38,26 @@ class FakeGH:
             return route.fulfill(status=404, headers=cors, body='{"message":"Not Found"}')
         path = m.group(1)
         if path is None:
-            return route.fulfill(status=200, headers=cors, body=json.dumps({'full_name': '100nao/life-plan-data', 'private': True, 'default_branch': 'main', 'permissions': {'push': True}}))
+            return route.fulfill(status=200, headers=cors, body=json.dumps({'full_name': '100nao/life-plan-data', 'private': self.private, 'default_branch': 'main', 'permissions': {'push': True}}))
+        if path.endswith('.jpg'):
+            cur = self.bins.get(path)
+            if request.method == 'GET':
+                if not cur: return route.fulfill(status=404, headers=cors, body='{"message":"Not Found"}')
+                return route.fulfill(status=200, headers=cors, body=json.dumps({'type': 'file', 'path': path, 'sha': cur[1], 'size': len(cur[0]), 'encoding': 'base64', 'content': base64.b64encode(cur[0]).decode()}))
+            if request.method == 'PUT':
+                body = json.loads(request.post_data)
+                if cur and body.get('sha') != cur[1]:
+                    return route.fulfill(status=422, headers=cors, body='{"message":"sha wasn\'t supplied"}')
+                raw = base64.b64decode(body['content'])
+                self.bins[path] = (raw, hashlib.sha1(raw).hexdigest())
+                self.puts.append((path, body['message']))
+                return route.fulfill(status=201, headers=cors, body=json.dumps({'content': {'path': path, 'sha': self.bins[path][1]}}))
+            if request.method == 'DELETE':
+                body = json.loads(request.post_data or '{}')
+                if not cur: return route.fulfill(status=404, headers=cors, body='{"message":"Not Found"}')
+                if body.get('sha') != cur[1]: return route.fulfill(status=409, headers=cors, body='{"message":"sha mismatch"}')
+                del self.bins[path]; self.deletes.append(path)
+                return route.fulfill(status=200, headers=cors, body='{"commit":{}}')
         if request.method == 'GET':
             if path not in self.files:
                 return route.fulfill(status=404, headers=cors, body='{"message":"Not Found"}')
@@ -625,7 +647,7 @@ with sync_playwright() as p:
     shot(pg, 'sp_drawer_v2.png')
     pg.click('#drawer a[data-nav=lessons]'); wait_idle(pg, 550)
     check('v2：ドロワーから移動して閉じる', '習い事' in pg.title() and not pg.evaluate("document.body.classList.contains('drawer-open')") and pg.is_hidden('#drawerBackdrop'))
-    pg.click('#menuBtn'); wait_idle(pg, 450); pg.mouse.click(370, 400); wait_idle(pg, 450)
+    pg.click('#menuBtn'); wait_idle(pg, 450); pg.mouse.click(20, 400); wait_idle(pg, 450)
     check('v2：背景タップで閉じる', not pg.evaluate("document.body.classList.contains('drawer-open')"))
     # 背景の選択
     pg.evaluate("location.hash = '#settings'"); wait_idle(pg, 400)
@@ -654,7 +676,7 @@ with sync_playwright() as p:
     def dd(n): return (TD - datetime.timedelta(days=n)).isoformat()
     def pomu(done, start, today=None):
         return pg.evaluate("([d, s, t]) => LifePlan.pomu({id: 'x', name: 't', startDate: s, done: d}, t)", [done, start, today or TD.isoformat()])
-    check('習慣：バージョン 1.3.0', S(pg, 'LifePlan.version') == '1.3.0')
+    check('習慣：バージョン 1.3.1', S(pg, 'LifePlan.version') == '1.3.1')
     check('習慣：state.habits が配列', S(pg, 'Array.isArray(LifePlan.state.habits)'))
     # ぽむのルール
     r = pomu([], dd(0)); check('ぽむ：0日はたまご（stage-1）', r['key'] == 'stage-1' and r['lv'] == 1, r)
@@ -770,9 +792,257 @@ with sync_playwright() as p:
     mp.evaluate("(s) => localStorage.setItem('lifeplan.v1', s)", json.dumps(old, ensure_ascii=False)); mp.reload(); wait_idle(mp, 700)
     hh = S(mp, 'LifePlan.state.habits')
     check('移行：壊れた習慣データを補正', len(hh) == 1 and hh[0]['id'] and hh[0]['done'] == ['2026-01-02'] and hh[0]['emoji'] and hh[0]['startDate'] == '2026-01-02', hh)
+    check('移行：missed がない古い習慣は空配列', hh and hh[0].get('missed') == [], hh)
+    old['habits'] = [{'name': '×つき', 'done': ['2026-01-02'], 'missed': ['2026-01-02', '2026-01-03', '2026-01-03', 'bad']}]
+    mp.evaluate("(s) => localStorage.setItem('lifeplan.v1', s)", json.dumps(old, ensure_ascii=False)); mp.reload(); wait_idle(mp, 700)
+    hh = S(mp, 'LifePlan.state.habits')
+    check('移行：〇と×が同じ日なら〇を優先・重複と不正な日付は除く', hh[0]['missed'] == ['2026-01-03'] and hh[0]['done'] == ['2026-01-02'], hh)
     mc.close()
     check('習慣：ドロワーに「習慣スタンプ」', pg.locator('#drawer a[data-nav=habits]').count() == 1)
 
+    # ════════ v1.3.1 ════════
+    def wait_js(p_, expr, timeout=10000):
+        t0 = time.time()
+        while time.time() - t0 < timeout / 1000:
+            if p_.evaluate(expr): return True
+            p_.wait_for_timeout(150)
+        return False
+    def rm_celebrate(p_=None):
+        (p_ or pg).evaluate("document.getElementById('pomuCelebrate') && document.getElementById('pomuCelebrate').remove()")
+    def hb(): return S(pg, f"LifePlan.state.habits.find(h => h.id === '{hid}')")
+    # ── 1) できなかった（×）スタンプ ──
+    pg.evaluate(f"location.hash = '#habits/{hid}'"); wait_idle(pg, 600); rm_celebrate()
+    check('×：今日の「できた」「できなかった」の2つのボタン', pg.locator('.stamp-pair .stamp-big').count() == 1 and pg.locator('.stamp-pair .stamp-miss').count() == 1 and 'できなかった' in pg.inner_text('.stamp-pair'))
+    if TD.isoformat() not in hb()['done']: pg.click('.stamp-pair .stamp-big'); wait_idle(pg, 500); rm_celebrate()
+    pg.click('.stamp-pair .stamp-miss'); wait_idle(pg, 600); rm_celebrate()
+    h1 = hb()
+    check('×：「できなかった」で今日が × になる（〇は外れる）', TD.isoformat() in h1['missed'] and TD.isoformat() not in h1['done'], h1['missed'])
+    check('×：ボタンが押された状態・カレンダーに ×', pg.locator('.stamp-miss.on').count() == 1 and pg.locator('button.hc-day.today.marked-x .st-xm').count() == 1 and pg.locator('.stamp-big.on').count() == 0)
+    check('×：統計に「できなかった日」', pg.locator('.hs-missed').count() == 1 and pg.inner_text('#missedCount').startswith('1'), pg.inner_text('.hs-missed') if pg.locator('.hs-missed').count() else '')
+    pg.click('.stamp-pair .stamp-miss'); wait_idle(pg, 500); rm_celebrate()
+    h1 = hb()
+    check('×：もう一度押すと取り消し', TD.isoformat() not in h1['missed'] and TD.isoformat() not in h1['done'] and pg.locator('.stamp-miss.on').count() == 0)
+    pg.click('.stamp-pair .stamp-big'); wait_idle(pg, 600); rm_celebrate()
+    check('×：「できた」で 〇 に戻せる', TD.isoformat() in hb()['done'] and pg.locator('.stamp-big.on').count() == 1)
+    # カレンダーのタップ：〇 → × → なし → 〇
+    tgt = dd(1)
+    if tgt[:7] != TD.isoformat()[:7]: pg.click('[data-action=habitMonth][data-dir="-1"]'); wait_idle(pg, 400)
+    cell = f'button.hc-day[data-date="{tgt}"]'
+    st0 = 'done' if tgt in hb()['done'] else 'none'
+    pg.click(cell); wait_idle(pg, 500); rm_celebrate()
+    h1 = hb(); st1 = 'done' if tgt in h1['done'] else 'missed' if tgt in h1['missed'] else 'none'
+    pg.click(cell); wait_idle(pg, 500); rm_celebrate()
+    h2 = hb(); st2 = 'done' if tgt in h2['done'] else 'missed' if tgt in h2['missed'] else 'none'
+    pg.click(cell); wait_idle(pg, 500); rm_celebrate()
+    h3 = hb(); st3 = 'done' if tgt in h3['done'] else 'missed' if tgt in h3['missed'] else 'none'
+    exp = {'done': ['missed', 'none', 'done'], 'none': ['done', 'missed', 'none']}[st0]
+    check('×：カレンダーをタップで 〇→×→なし の順に切り替え', [st1, st2, st3] == exp, [st0, st1, st2, st3])
+    check('×：〇と×は同じ日に重ならない', all(not (set(h['done']) & set(h['missed'])) for h in [h1, h2, h3]))
+    # 〇の日を × にしてスクリーンショット（〇と×が並ぶ）
+    while ('missed' if tgt in hb()['missed'] else 'x') != 'missed':
+        pg.click(cell); wait_idle(pg, 450); rm_celebrate()
+    check('×：カレンダーの × は自分で押した印（marked-x）と、押していない日（auto-x）で区別', pg.locator(f'{cell}.marked-x .st-xm').count() == 1 and pg.locator('button.hc-day.marked-x').count() >= 1)
+    # 進化のルールは「スタンプなし」と同じ
+    dn = [dd(i) for i in range(2, 9)]
+    a = pg.evaluate("([d, s, t]) => LifePlan.pomu({id: 'x', name: 't', startDate: s, done: d}, t)", [dn, dd(10), TD.isoformat()])
+    b = pg.evaluate("([d, m, s, t]) => LifePlan.pomu({id: 'x', name: 't', startDate: s, done: d, missed: m}, t)", [dn, [dd(1), dd(9), dd(10)], dd(10), TD.isoformat()])
+    check('×：進化の判定は × とスタンプなしが同じ扱い', a == b and a['M'] == 3, [a, b])
+    pg.evaluate("document.querySelector('.habit-cal').scrollIntoView({block: 'start'}); window.scrollBy(0, -70)"); wait_idle(pg, 300)
+    shot(pg, 'v131_habit.png')
+    if S(pg, 'LifePlan.sync.connected'):
+        pg.evaluate('LifePlan.syncNow()'); wait_idle(pg, 1500)
+        rem = gh.get_json('data/life-plan.json')
+        rh = next((h for h in rem['data'].get('habits', []) if h.get('id') == hid), {})
+        check('×：GitHub 同期データに missed が入る', tgt in rh.get('missed', []) and tgt not in rh.get('done', []), rh.get('missed'))
+    pg.click(cell); wait_idle(pg, 450); pg.click(cell); wait_idle(pg, 450); rm_celebrate()  # × → なし → 〇 に戻す
+    check('×：元に戻した', tgt in hb()['done'])
+
+    # ── 2) トップバーのぽむ ──
+    pg.evaluate("location.hash = '#home'"); wait_idle(pg, 700); pg.evaluate('window.scrollTo(0,0)'); wait_idle(pg, 200)
+    tp = S(pg, 'LifePlan.topPomu()')
+    tsrc = pg.get_attribute('#topPomu', 'src')
+    check('ぽむ（上部バー）：今の姿を表示（-256.webp）', tsrc == f"images/monster/{tp['key']}-256.webp" and tp['id'] == hid, [tsrc, tp])
+    check('ぽむ（上部バー）：画像が読み込める', pg.evaluate("(() => { const i = document.getElementById('topPomu'); return i.complete && i.naturalWidth > 0; })()"))
+    bb = pg.locator('.brand-pomu').bounding_box()
+    check('ぽむ（上部バー）：小さく丸い・中央', bb and 36 <= bb['width'] <= 48 and abs((bb['x'] + bb['width'] / 2) - 195) <= 3 and pg.evaluate("getComputedStyle(document.querySelector('.brand-pomu')).borderRadius") == '50%', bb)
+    shot(pg, 'v131_topbar.png')
+    pg.click('.brand-pomu'); wait_idle(pg, 500); rm_celebrate()
+    check('ぽむ（上部バー）：タップで習慣スタンプへ', pg.evaluate('location.hash') == '#habits')
+    # いちばん育った ぽむ／同じレベルなら最近スタンプした目標／目標なしは stage-1（別コンテキスト）
+    tc = browser.new_context(viewport={'width': 390, 'height': 844}, locale='ja-JP', timezone_id='Asia/Tokyo', service_workers='block')
+    tpg = tc.new_page(); tpg.on('pageerror', lambda e: errors.append('TOP ' + str(e)))
+    tpg.goto(URL); wait_idle(tpg, 500)
+    check('ぽむ（上部バー）：目標がないときは ぽむたま（stage-1）', tpg.get_attribute('#topPomu', 'src') == 'images/monster/stage-1-256.webp')
+    def put_habits(p_, hs):
+        p_.evaluate("(hs) => { const s = JSON.parse(localStorage.getItem('lifeplan.v1') || '{}'); s.habits = hs; localStorage.setItem('lifeplan.v1', JSON.stringify(s)); }", hs); p_.reload(); wait_idle(p_, 600)
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    HA = {'id': 'ha', 'name': 'A', 'emoji': '📚', 'startDate': dd(20), 'done': [dd(i) for i in range(5, 9)], 'createdAt': now, 'updatedAt': now}  # Lv.2・最後 dd(5)
+    HB = {'id': 'hb', 'name': 'B', 'emoji': '🏃', 'startDate': dd(20), 'done': [dd(i) for i in range(2, 6)], 'createdAt': now, 'updatedAt': now}  # Lv.2・最後 dd(2)
+    HC = {'id': 'hc', 'name': 'C', 'emoji': '💧', 'startDate': dd(20), 'done': [dd(1)], 'createdAt': now, 'updatedAt': now}  # Lv.1・最後 dd(1)
+    put_habits(tpg, [HA, HB, HC])
+    t1 = S(tpg, 'LifePlan.topPomu()')
+    check('ぽむ（上部バー）：同じレベルなら最近スタンプした目標', t1['id'] == 'hb' and t1['lv'] == 2 and tpg.get_attribute('#topPomu', 'src') == f"images/monster/{t1['key']}-256.webp", t1)
+    HA2 = dict(HA, done=[dd(i) for i in range(5, 13)])  # Lv.3
+    put_habits(tpg, [HA2, HB, HC])
+    t2 = S(tpg, 'LifePlan.topPomu()')
+    check('ぽむ（上部バー）：いちばんレベルの高い目標', t2['id'] == 'ha' and t2['lv'] == 3 and tpg.get_attribute('#topPomu', 'src') == f"images/monster/{t2['key']}-256.webp", t2)
+    tc.close()
+
+    # ── 3) スワイプでメニュー（右から出る）──
+    cdp = ctx.new_cdp_session(pg)
+    def swipe(x0, y0, x1, y1, steps=8, ms=16):
+        cdp.send('Input.dispatchTouchEvent', {'type': 'touchStart', 'touchPoints': [{'x': x0, 'y': y0}]})
+        for k in range(1, steps + 1):
+            cdp.send('Input.dispatchTouchEvent', {'type': 'touchMove', 'touchPoints': [{'x': x0 + (x1 - x0) * k / steps, 'y': y0 + (y1 - y0) * k / steps}]}); pg.wait_for_timeout(ms)
+        cdp.send('Input.dispatchTouchEvent', {'type': 'touchEnd', 'touchPoints': []}); pg.wait_for_timeout(550)
+    is_open = lambda: pg.evaluate("document.body.classList.contains('drawer-open')")
+    pg.evaluate("location.hash = '#home'"); wait_idle(pg, 600); pg.evaluate('window.scrollTo(0,0)')
+    swipe(340, 520, 110, 528)
+    db = pg.locator('#drawer').bounding_box()
+    check('スワイプ：右から左へなぞるとメニューが開く', is_open() and pg.is_visible('#drawerBackdrop'))
+    check('スワイプ：メニューは右側から出る', db and abs(db['x'] + db['width'] - 390) <= 2 and db['x'] > 30, db)
+    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.3.1' in pg.inner_text('#drawer [data-action=forceUpdate]'))
+    shot(pg, 'v131_menu.png')
+    swipe(90, 500, 330, 505)
+    check('スワイプ：左から右へで閉じる', not is_open())
+    swipe(200, 650, 215, 300)
+    check('スワイプ：縦のスクロールでは開かない', not is_open())
+    swipe(340, 520, 300, 522, steps=30, ms=25)
+    check('スワイプ：短いなぞりでは開かない', not is_open())
+    pg.evaluate("""(() => { const d = document.createElement('div'); d.id = 'hscroll'; d.style.cssText = 'overflow-x:auto;width:300px;height:80px;position:fixed;top:300px;left:40px;z-index:50;background:#eee'; d.innerHTML = '<div style="width:1200px;height:60px">横スクロール</div>'; document.body.appendChild(d); })()""")
+    swipe(320, 340, 80, 342)
+    check('スワイプ：横スクロールする場所では開かない', not is_open())
+    pg.evaluate("document.getElementById('hscroll').remove()")
+    pg.evaluate("location.hash = '#journal'"); wait_idle(pg, 500)
+    sb = pg.locator('[data-input=journalSearch]').bounding_box()
+    swipe(sb['x'] + sb['width'] - 20, sb['y'] + sb['height'] / 2, sb['x'] + 30, sb['y'] + sb['height'] / 2 + 2)
+    check('スワイプ：入力欄から始めたときは開かない', not is_open())
+    pg.click('#menuBtn'); wait_idle(pg, 550)
+    check('スワイプ：☰ ボタンでも開ける', is_open())
+    pg.mouse.click(20, 400); wait_idle(pg, 500)
+    check('スワイプ：背景タップで閉じる', not is_open())
+    pg.evaluate(f"location.hash = '#habits/{hid}'"); wait_idle(pg, 600); rm_celebrate()
+    before = hb()['done'][:]
+    pg.locator('button.hc-day.today').tap(); wait_idle(pg, 600); rm_celebrate()
+    after = hb()
+    check('スワイプ：カレンダーのタップは今まで通り', (TD.isoformat() in before) != (TD.isoformat() in after['done']) or TD.isoformat() in after['missed'])
+    while TD.isoformat() not in hb()['done']:
+        pg.locator('button.hc-day.today').click(); wait_idle(pg, 450); rm_celebrate()
+
+    # ── 5) ジャーナル：日付ごとに折りたたみ・写真 ──
+    pg.reload(); wait_idle(pg, 800)
+    pg.evaluate("location.hash = '#journal'"); wait_idle(pg, 700)
+    nd = pg.locator('#journalList .jday').count()
+    check('ジャーナル：日付ごとにまとめる', nd >= 2 and pg.locator('#journalList .jday-head').count() == nd, nd)
+    check('ジャーナル：最初はすべて折りたたみ', pg.locator('#journalList .jday.open').count() == 0 and pg.evaluate("[...document.querySelectorAll('.jday-body')].every(b => b.getBoundingClientRect().height < 2)"))
+    h0 = pg.inner_text('#journalList .jday-head >> nth=0')
+    check('ジャーナル：見出しに日付・件数・1行のプレビュー', '件' in h0 and pg.locator('#journalList .jday-head >> nth=0 >> .jd-preview').inner_text().strip() != '' and pg.evaluate("(() => { const p = document.querySelector('.jd-preview'); return getComputedStyle(p).whiteSpace === 'nowrap' && getComputedStyle(p).textOverflow === 'ellipsis'; })()"), h0)
+    pg.click('#journalList .jday-head >> nth=0'); wait_idle(pg, 600)
+    check('ジャーナル：タップで開く（アニメーション）', pg.locator('#journalList .jday.open').count() == 1 and pg.get_attribute('#journalList .jday-head >> nth=0', 'aria-expanded') == 'true' and pg.evaluate("document.querySelector('.jday.open .jday-body').getBoundingClientRect().height > 40") and 'grid-template-rows' in pg.evaluate("getComputedStyle(document.querySelector('.jday-body')).transitionProperty"))
+    pg.click('#journalList .jday-head >> nth=0'); wait_idle(pg, 600)
+    check('ジャーナル：もう一度タップで閉じる', pg.locator('#journalList .jday.open').count() == 0)
+    # 写真を追加
+    def mkjpg(w, h, color):
+        im = Image.new('RGB', (w, h), color)
+        from PIL import ImageDraw
+        dr = ImageDraw.Draw(im); dr.ellipse((w * .2, h * .2, w * .8, h * .8), fill=(255, 255, 255)); dr.rectangle((0, 0, w // 3, h // 6), fill=(30, 30, 30))
+        b = io.BytesIO(); im.save(b, 'JPEG', quality=90); return b.getvalue()
+    p1 = mkjpg(2400, 1600, (236, 143, 134)); p2 = mkjpg(1200, 1800, (111, 167, 176)); p3 = mkjpg(900, 900, (214, 169, 63))
+    pg.click('.view-head [data-action=editJournal]'); wait_idle(pg, 400)
+    check('写真：編集画面に「写真を追加」', pg.locator('#modal #jPhotoInput').count() == 1 and pg.get_attribute('#modal #jPhotoInput', 'accept') == 'image/*' and pg.get_attribute('#modal #jPhotoInput', 'multiple') is not None)
+    pg.fill('#modal textarea[name=text]', '公園で散歩。写真つきのテスト日記')
+    pg.fill('#modal input[name=date]', dd(2))
+    pg.set_input_files('#modal #jPhotoInput', files=[{'name': 'p1.jpg', 'mimeType': 'image/jpeg', 'buffer': p1}, {'name': 'p2.jpg', 'mimeType': 'image/jpeg', 'buffer': p2}])
+    wait_js(pg, "document.querySelectorAll('#jPhotoBox .j-photo img[src]').length === 2")
+    check('写真：サムネイルを表示', pg.locator('#jPhotoBox .j-photo img[src^="blob:"]').count() == 2 and '2枚' in pg.inner_text('#jPhotoCount'))
+    pg.click('#modal button[type=submit]'); wait_idle(pg, 700)
+    je = S(pg, "LifePlan.state.journal.find(e => e.text.includes('写真つきのテスト日記'))")
+    pids = je['photos'] if je else []
+    check('写真：ジャーナルには写真の id だけを保存', len(pids) == 2 and all(re.match(r'^[A-Za-z0-9_-]{6,64}$', x) for x in pids), pids)
+    lsv = pg.evaluate("localStorage.getItem('lifeplan.v1')")
+    check('写真：localStorage に画像データは入らない', 'data:image' not in lsv and 'base64' not in lsv and len(lsv) < 200000)
+    dims = [pg.evaluate("(id) => LifePlan.photoDims(id)", x) for x in pids]
+    check('写真：長い辺 1280px に縮小（JPEG）して IndexedDB に保存', dims[0] and max(dims[0][:2]) == 1280 and dims[0][0] > dims[0][1] and dims[1] and max(dims[1][:2]) == 1280 and dims[1][1] > dims[1][0] and all(d[2] < 400000 for d in dims), dims)
+    check('写真：保存した日付は開いた状態で、サムネイルが出る', pg.locator(f'.jday.open .j-photo img[data-photo="{pids[0]}"][src]').count() == 1 and pg.locator('.jday.open .j-photo img[src]').count() >= 2)
+    check('写真：選んだ日付のグループに入る', je['date'] == dd(2))
+    pg.evaluate(f"(() => {{ const g = document.querySelector('.jday[data-date=\"{dd(2)}\"]'); window.scrollBy(0, g.getBoundingClientRect().top - 330); }})()"); wait_idle(pg, 400)
+    shot(pg, 'v131_journal.png')
+    pg.click(f'.jday.open .j-photo-view[data-photo-id="{pids[0]}"]'); wait_idle(pg, 500)
+    check('写真：タップで大きく表示', pg.locator('#photoViewer').count() == 1 and pg.evaluate("(() => { const i = document.querySelector('#photoViewer .pv-img'); return i && i.complete && i.naturalWidth === 1280; })()"))
+    shot(pg, 'v131_photo_view.png')
+    pg.click('#photoViewer [data-pv=close]'); wait_idle(pg, 400)
+    check('写真：閉じる', pg.locator('#photoViewer').count() == 0)
+    # GitHub（非公開データリポジトリ）に1枚ずつ保存
+    pg.evaluate('LifePlan.syncNow()')
+    for _ in range(30):
+        if all(f'data/photos/{x}.jpg' in gh.bins for x in pids): break
+        pg.wait_for_timeout(300)
+    check('写真：GitHub の data/photos/<id>.jpg に保存', all(f'data/photos/{x}.jpg' in gh.bins and gh.bins[f'data/photos/{x}.jpg'][0][:2] == b'\xff\xd8' for x in pids), list(gh.bins))
+    rem = gh.get_json('data/life-plan.json')
+    rj = next((e for e in rem['data']['journal'] if e['id'] == je['id']), {})
+    check('写真：同期データ（JSON）には id だけ', rj.get('photos') == pids and 'base64' not in json.dumps(rem) and '/9j/' not in json.dumps(rem))
+    pg.wait_for_timeout(400)
+    check('写真：送信済みの印', all(pg.evaluate("(id) => LifePlan.photoInfo(id)", x)['synced'] for x in pids))
+    # 編集：外してキャンセルなら残る／追加してキャンセルなら消える
+    n_idb = len(pg.evaluate('LifePlan.photoIds()'))
+    pg.click(f'.jday.open article.journal[data-id="{je["id"]}"] .journal-head'); wait_idle(pg, 500)
+    check('写真：編集画面に保存済みの写真', pg.locator('#jPhotoBox .j-photo').count() == 2)
+    pg.click(f'#jPhotoBox .j-photo-del[data-photo-id="{pids[1]}"]'); wait_idle(pg, 200)
+    pg.set_input_files('#modal #jPhotoInput', files=[{'name': 'p3.jpg', 'mimeType': 'image/jpeg', 'buffer': p3}])
+    wait_js(pg, "document.querySelectorAll('#jPhotoBox .j-photo img[src]').length === 2")
+    pg.click('#modal [data-action=closeModal] >> nth=-1'); wait_idle(pg, 500)
+    check('写真：キャンセルすると元のまま（追加分は破棄）', S(pg, f"LifePlan.state.journal.find(e => e.id === '{je['id']}').photos") == pids and len(pg.evaluate('LifePlan.photoIds()')) == n_idb)
+    # 別の端末：id だけ届いて、写真は GitHub から読み込む
+    oc = browser.new_context(viewport={'width': 390, 'height': 844}, locale='ja-JP', timezone_id='Asia/Tokyo', service_workers='block')
+    oc.route('https://api.github.com/**', gh.handle)
+    op = oc.new_page(); op.on('pageerror', lambda e: errors.append('OTHER ' + str(e)))
+    op.goto(URL); wait_idle(op, 300)
+    op.evaluate("localStorage.setItem('lifeplan.sync', JSON.stringify({owner: '100nao', repo: 'life-plan-data', branch: 'main', path: 'data/life-plan.json', inboxPath: 'data/coach-inbox.json', token: 'github_pat_TEST', auto: true, connected: true}))")
+    op.reload(); wait_idle(op, 1500)
+    for _ in range(30):
+        if all(x in op.evaluate('LifePlan.photoIds()') for x in pids): break
+        op.wait_for_timeout(300)
+    check('写真（別の端末）：GitHub から写真を読み込む', all(x in op.evaluate('LifePlan.photoIds()') for x in pids))
+    op.evaluate("location.hash = '#journal'"); wait_idle(op, 600)
+    jd = je['date']
+    op.click(f'.jday[data-date="{jd}"] .jday-head'); wait_idle(op, 800)
+    check('写真（別の端末）：サムネイルが表示される', op.evaluate(f"[...document.querySelectorAll('.jday.open .j-photo img')].filter(i => ['{pids[0]}','{pids[1]}'].includes(i.dataset.photo)).every(i => i.complete && i.naturalWidth > 0)") and op.locator('.jday.open .j-photo img[src]').count() >= 2)
+    # 公開リポジトリには写真を保存しない
+    gh.private = False
+    op.evaluate("localStorage.removeItem('lifeplan.photoSync')"); op.reload(); wait_idle(op, 1200)
+    op.evaluate("location.hash = '#journal'"); wait_idle(op, 400)
+    op.click('.view-head [data-action=editJournal]'); wait_idle(op, 400)
+    op.fill('#modal textarea[name=text]', '公開リポジトリのテスト')
+    op.set_input_files('#modal #jPhotoInput', files=[{'name': 'p3.jpg', 'mimeType': 'image/jpeg', 'buffer': p3}])
+    wait_js(op, "document.querySelectorAll('#jPhotoBox .j-photo img[src]').length === 1")
+    op.click('#modal button[type=submit]'); wait_idle(op, 500)
+    nb = len(gh.bins)
+    rr = op.evaluate('LifePlan.syncPhotos()')
+    check('写真：公開リポジトリには保存しない', len(gh.bins) == nb and '公開リポジトリ' in (rr.get('error') or ''), rr)
+    gh.private = True
+    # 削除（確認つき・元に戻せる・GitHub からも消える）
+    pg.click(f'.jday.open .j-photo-view[data-photo-id="{pids[1]}"]'); wait_idle(pg, 500)
+    pg.click('#photoViewer [data-pv=del]'); wait_idle(pg, 400)
+    check('写真：削除の確認', '削除しますか' in pg.inner_text('#modal'))
+    pg.click('#confirmOk'); wait_idle(pg, 500)
+    check('写真：ジャーナルから外れる', S(pg, f"LifePlan.state.journal.find(e => e.id === '{je['id']}').photos") == [pids[0]] and S(pg, f"!!LifePlan.state.deleted['photo:{pids[1]}']"))
+    pg.click('#toast .toast-btn'); wait_idle(pg, 500)
+    check('写真：元に戻せる', S(pg, f"LifePlan.state.journal.find(e => e.id === '{je['id']}').photos") == pids and not S(pg, f"!!LifePlan.state.deleted['photo:{pids[1]}']"))
+    pg.click(f'.jday.open .j-photo-view[data-photo-id="{pids[1]}"]'); wait_idle(pg, 500)
+    pg.click('#photoViewer [data-pv=del]'); wait_idle(pg, 400); pg.click('#confirmOk'); wait_idle(pg, 500)
+    pg.evaluate('LifePlan.syncNow().then(() => LifePlan.syncPhotos())'); pg.wait_for_timeout(1500)
+    check('写真：削除してすぐは（元に戻せるよう）残しておく', f'data/photos/{pids[1]}.jpg' in gh.bins and pids[1] in pg.evaluate('LifePlan.photoIds()'))
+    TT = "window.__realNow = window.__realNow || Date.now; Date.now = () => window.__realNow.call(Date) + 180000"  # 猶予（2分）を過ぎたことにする
+    pg.evaluate(TT); pg.evaluate('LifePlan.syncPhotos()'); pg.wait_for_timeout(800)
+    check('写真：削除は GitHub と端末からも消える', f'data/photos/{pids[1]}.jpg' not in gh.bins and f'data/photos/{pids[0]}.jpg' in gh.bins and pids[1] not in pg.evaluate('LifePlan.photoIds()'), [list(gh.bins), gh.deletes])
+    pg.evaluate("Date.now = window.__realNow")
+    op.evaluate('LifePlan.syncNow()'); op.wait_for_timeout(1200); op.evaluate(TT); op.evaluate('LifePlan.syncPhotos()'); op.wait_for_timeout(800)
+    check('写真（別の端末）：削除が伝わる', pids[1] not in op.evaluate('LifePlan.photoIds()') and pids[1] not in S(op, f"LifePlan.state.journal.find(e => e.id === '{je['id']}').photos"))
+    oc.close()
+    # 古いジャーナル（photos なし）も読める
+    check('写真：古いジャーナルは photos が空配列', S(pg, "LifePlan.state.journal.every(e => Array.isArray(e.photos))"))
+    # ホームの最近のジャーナルもそのまま
+    pg.evaluate("location.hash = '#home'"); wait_idle(pg, 500)
     # ── PC ──
     state_dump = pg.evaluate("localStorage.getItem('lifeplan.v1')")
     # ── Service Worker・オフライン（別コンテキスト：同期のモックと分けるため）──
@@ -786,6 +1056,20 @@ with sync_playwright() as p:
     sp.evaluate("location.hash = '#habits/' + (LifePlan.state.habits[0] || {}).id"); wait_idle(sp, 900)
     check('SW：ぽむ画像を実行時キャッシュ', sp.evaluate("caches.keys().then(ks => Promise.all(ks.map(k => caches.open(k).then(c => c.keys())))).then(a => a.flat().some(r => /images\\/monster\\/.+\\.webp$/.test(r.url)))"))
     sp.evaluate("location.hash = '#home'"); wait_idle(sp, 300)
+    # アップデート：キャッシュを消して ?v= つきで読み込み直す
+    sp.evaluate("caches.open('lifeplan-old-test').then(c => c.put('/dummy', new Response('x')))"); wait_idle(sp, 200)
+    sp.evaluate("sessionStorage.setItem('navMark', '1'); window.__beforeUpdate = 1")
+    sp.click('#menuBtn'); wait_idle(sp, 500)
+    with sp.expect_navigation(timeout=15000):
+        sp.click('#drawer [data-action=forceUpdate]')
+        sp.wait_for_timeout(150)
+        check('アップデート：「最新版を確認しています…」', '最新版を確認しています' in sp.inner_text('#toast'))
+    wait_idle(sp, 1200)
+    nav = sp.evaluate("performance.getEntriesByType('navigation')[0].name")
+    check('アップデート：?v=<時刻> で読み込み直す', re.search(r'[?&]v=\d{10,}', nav) is not None and sp.evaluate('window.__beforeUpdate') is None, nav)
+    check('アップデート：古いキャッシュを削除', 'lifeplan-old-test' not in sp.evaluate('caches.keys()'))
+    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.3.1' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
+    check('アップデート：Service Worker は引き続き有効', sp.evaluate("navigator.serviceWorker.getRegistration().then(r => !!(r && r.active))"))
     swc.set_offline(True)
     sp.reload(); wait_idle(sp, 1200)
     check('オフラインで起動', sp.locator('.tabbar').count() == 1 and sp.evaluate('LifePlan.state.items.length') > 0)
@@ -802,6 +1086,8 @@ with sync_playwright() as p:
     pp = pc.new_page(); pp.on('pageerror', lambda e: errors.append('PC ' + str(e)))
     pp.goto(URL); pp.evaluate("(s) => localStorage.setItem('lifeplan.v1', s)", state_dump); pp.reload(); wait_idle(pp, 800)
     shot(pp, 'pc_home.png')
+    check('PC：サイドバーに「アップデート」', pp.locator('.tabbar [data-action=forceUpdate]').is_visible() and 'アップデート' in pp.inner_text('.tabbar [data-action=forceUpdate]'))
+    check('PC：上部バーに ぽむ', pp.locator('#topPomu').is_visible() and '-256.webp' in pp.get_attribute('#topPomu', 'src'))
     check('PC：サイドバーに全タブ（後回し・習い事も）', pp.locator('.tabbar a[data-nav=later]').is_visible() and pp.locator('.tabbar a[data-nav=lessons]').is_visible() and not pp.locator('.tab-indicator').is_visible())
     pp.evaluate("location.hash = '#matrix'"); wait_idle(pp, 500)
     # PC：ドラッグ＆ドロップ

@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.3.0';
+  const APP_VERSION = '1.3.1';
   const DEFAULT_CATEGORIES = ['旅行', '仕事/キャリア', '健康', '家族', '趣味', '学び', 'お金', 'その他'];
   const IMPORTANCE = { high: '高', mid: '中', low: '低' };
   const IMPORTANCE_ORDER = { high: 0, mid: 1, low: 2 };
@@ -142,8 +142,11 @@
   }
   function normJournal(j) {
     const t = nowIso();
-    return { id: j.id || uid(), date: isDateStr(j.date) ? j.date : todayStr(), text: String(j.text || ''), mood: [1, 2, 3, 4, 5].includes(Number(j.mood)) ? Number(j.mood) : 0, linked: Array.isArray(j.linked) ? j.linked.map(String) : [], source: ['photo', 'obsidian', 'ai'].includes(j.source) ? j.source : '', createdAt: j.createdAt || t, updatedAt: j.updatedAt || t };
+    return { id: j.id || uid(), date: isDateStr(j.date) ? j.date : todayStr(), text: String(j.text || ''), mood: [1, 2, 3, 4, 5].includes(Number(j.mood)) ? Number(j.mood) : 0, linked: Array.isArray(j.linked) ? j.linked.map(String) : [], photos: normPhotoIds(j.photos), source: ['photo', 'obsidian', 'ai'].includes(j.source) ? j.source : '', createdAt: j.createdAt || t, updatedAt: j.updatedAt || t };
   }
+  // ジャーナルの写真は id だけを持つ（画像本体は IndexedDB と非公開データリポジトリの data/photos/<id>.jpg）
+  const PHOTO_ID_RE = /^[A-Za-z0-9_-]{6,64}$/;
+  function normPhotoIds(a) { return Array.isArray(a) ? [...new Set(a.map(String).filter((x) => PHOTO_ID_RE.test(x)))].slice(0, 30) : []; }
   function normCoach(c) {
     const t = nowIso();
     return { id: c.id || uid(), date: isDateStr(c.date) ? c.date : todayStr(), title: String(c.title || ''), text: String(c.text || ''), read: c.read !== false, source: c.source || '', stepsResult: Array.isArray(c.stepsResult) ? c.stepsResult.map(String) : [], createdAt: c.createdAt || t, updatedAt: c.updatedAt || t };
@@ -158,9 +161,12 @@
     const t = nowIso();
     const done = [...new Set((Array.isArray(h.done) ? h.done : []).filter(isRealDay))].sort();
     const start = isRealDay(h.startDate) ? h.startDate : (done[0] || todayStr());
+    // missed は「できなかった（×）」を明示した日。同じ日に〇があれば〇を優先（排他的）
+    const doneSet = new Set(done);
+    const missed = [...new Set((Array.isArray(h.missed) ? h.missed : []).filter((d) => isRealDay(d) && !doneSet.has(d)))].sort();
     return {
       id: h.id || uid(), emoji: Array.from(String(h.emoji || '').trim()).slice(0, 4).join('') || '🌱', name: String(h.name || '').trim() || '（無題）',
-      startDate: start, done, seen: String(h.seen || ''), unlocked: Array.isArray(h.unlocked) ? [...new Set(h.unlocked.map(String))] : [],
+      startDate: start, done, missed, seen: String(h.seen || ''), unlocked: Array.isArray(h.unlocked) ? [...new Set(h.unlocked.map(String))] : [],
       createdAt: h.createdAt || t, updatedAt: h.updatedAt || t,
     };
   }
@@ -217,6 +223,8 @@
       next[k].forEach((x) => { if (prevMap.get(x.id) !== JSON.stringify(x)) { x.updatedAt = now; delete next.deleted[x.id]; } });
       prev[k].forEach((x) => { if (!nextIds.has(x.id)) next.deleted[x.id] = now; });
     });
+    // 元に戻したジャーナルの写真は削除扱いを取り消す
+    next.journal.forEach((e) => e.photos.forEach((p) => { delete next.deleted['photo:' + p]; }));
     if (JSON.stringify(next.categories) !== JSON.stringify(prev.categories)) next.categoriesAt = now;
     Object.keys(next.focus).forEach((y) => { if (next.focus[y] !== prev.focus[y]) next.focusAt[y] = now; });
     next.settings = prev.settings;
@@ -257,6 +265,7 @@
     laterSort: 'updated',
     matrixFilter: 'all',
     journalQuery: '',
+    journalOpen: new Set(), // 開いている日付（ジャーナル一覧）
     searchQuery: '',
     randomId: null,
     coachDays: 14,

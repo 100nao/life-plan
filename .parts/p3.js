@@ -14,23 +14,53 @@
   }
 
   // ───────────────────────── 画面: ジャーナル ─────────────────────────
+  // 日付ごとにまとめて、最初は折りたたみ。タップで開く（開いた日付は ui.journalOpen に覚えておく）
+  const SRC_LABEL = { photo: '📷 手書き', obsidian: '📝 Obsidian', ai: '🤖 AI' };
+  function journalEntry(e) {
+    return `<article class="card journal" data-action="editJournal" data-id="${e.id}" role="button" tabindex="0">
+        <div class="journal-head"><span class="mood" title="${MOOD_LABEL[e.mood] || ''}">${MOODS[e.mood] || '📝'}</span><b>${e.mood ? `気分 ${e.mood}/5` : 'メモ'}</b><span class="muted small">${e.createdAt ? pad(new Date(e.createdAt).getHours()) + ':' + pad(new Date(e.createdAt).getMinutes()) : ''}</span>${e.source ? `<span class="chip src-chip">${SRC_LABEL[e.source]}</span>` : ''}</div>
+        ${e.text ? `<p class="pre">${esc(e.text)}</p>` : ''}
+        ${photoThumbs(e.photos, e.id, false)}
+        ${e.linked.length ? `<div class="chips">${e.linked.map((id) => { const it = getItem(id); return it ? `<button class="chip link-chip" data-action="openItem" data-id="${it.id}">🔗 ${esc(trunc(it.title, 20))}</button>` : ''; }).join('')}</div>` : ''}
+      </article>`;
+  }
   function journalList(q) {
     const nq = q.trim().toLowerCase();
     const list = state.journal.filter((e) => !nq || e.text.toLowerCase().includes(nq) || e.date.includes(nq) || e.linked.some((id) => { const it = getItem(id); return it && it.title.toLowerCase().includes(nq); }))
       .sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
     if (!state.journal.length) return emptyState('ジャーナルはまだありません', 'その日の出来事、気分、考えたことを短く残しておきましょう。タスクと結びつけることもできます。', '<button class="btn primary" data-action="editJournal">＋ 今日を書く</button><button class="btn soft" data-action="pickPhoto">📷 写真から追加</button><button class="btn soft" data-action="openObsidian">📝 Obsidianから取り込む</button>');
     if (!list.length) return '<p class="muted center pad">見つかりませんでした。</p>';
+    const days = [];
+    list.forEach((e) => { const g = days[days.length - 1]; if (g && g.date === e.date) g.list.push(e); else days.push({ date: e.date, list: [e] }); });
     let html = ''; let cur = '';
-    list.forEach((e) => {
-      const m = e.date.slice(0, 7);
+    days.forEach(({ date, list: es }) => {
+      const m = date.slice(0, 7);
       if (m !== cur) { cur = m; html += `<h3 class="month-head">${Number(m.slice(0, 4))}年${Number(m.slice(5, 7))}月</h3>`; }
-      html += `<article class="card journal" data-action="editJournal" data-id="${e.id}" role="button" tabindex="0">
-        <div class="journal-head"><span class="mood" title="${MOOD_LABEL[e.mood] || ''}">${MOODS[e.mood] || '📝'}</span><b>${fmtDate(e.date)}</b>${e.mood ? `<span class="muted small">気分 ${e.mood}/5</span>` : ''}${e.source ? `<span class="chip src-chip">${{ photo: '📷 手書き', obsidian: '📝 Obsidian', ai: '🤖 AI' }[e.source]}</span>` : ''}</div>
-        <p class="pre">${esc(e.text)}</p>
-        ${e.linked.length ? `<div class="chips">${e.linked.map((id) => { const it = getItem(id); return it ? `<button class="chip link-chip" data-action="openItem" data-id="${it.id}">🔗 ${esc(trunc(it.title, 20))}</button>` : ''; }).join('')}</div>` : ''}
-      </article>`;
+      const open = !!nq || ui.journalOpen.has(date);
+      const first = es.find((e) => e.text.trim()) || es[0];
+      const preview = first.text.replace(/\s+/g, ' ').trim() || '（写真のみ）';
+      const nPhotos = es.reduce((a, e) => a + e.photos.length, 0);
+      const moods = [...new Set(es.map((e) => MOODS[e.mood]).filter(Boolean))].slice(0, 3).join('');
+      const srcs = [...new Set(es.map((e) => e.source).filter(Boolean))].map((x) => `<span class="chip src-chip">${SRC_LABEL[x]}</span>`).join('');
+      html += `<section class="jday${open ? ' open' : ''}" data-date="${date}">
+        <button type="button" class="jday-head card" data-action="toggleJDay" data-date="${date}" aria-expanded="${open}">
+          <span class="jd-date"><b>${fmtDate(date)}</b><span class="jd-meta"><span class="jd-count">${es.length}件</span>${nPhotos ? `<span class="jd-photos">📷 ${nPhotos}</span>` : ''}${moods ? `<span class="jd-moods">${moods}</span>` : ''}${srcs}</span></span>
+          <span class="jd-preview">${esc(trunc(preview, 80))}</span>
+          <svg class="jd-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="jday-body"${open ? '' : ' inert'}><div class="jday-in">${es.map(journalEntry).join('')}</div></div>
+      </section>`;
     });
     return html;
+  }
+  function toggleJournalDay(date, btn) {
+    const sec = btn ? btn.closest('.jday') : $(`.jday[data-date="${date}"]`);
+    if (!sec) return;
+    const open = !sec.classList.contains('open');
+    sec.classList.toggle('open', open);
+    if (btn) btn.setAttribute('aria-expanded', String(open));
+    const body = $('.jday-body', sec); if (body) body.toggleAttribute('inert', !open);
+    if (open) { ui.journalOpen.add(date); hydratePhotos(sec); } else ui.journalOpen.delete(date);
   }
   function viewJournal() {
     const recent = state.journal.filter((e) => e.mood && daysUntil(e.date) >= -13);
@@ -322,7 +352,9 @@
     const w = addDays(today, -14);
     const missed = [];
     for (let x = h.startDate > w ? h.startDate : w; x < today; x = addDays(x, 1)) if (!set.has(x)) missed.push(x);
-    return { set, total, streak, best, missed, M: missed.length, doneToday: set.has(today), today };
+    // ×（できなかった）を明示した日。進化の判定では「スタンプなし」と同じ扱い（missed に含まれる）
+    const xset = new Set((h.missed || []).filter((d) => d >= h.startDate && d <= today && !set.has(d)));
+    return { set, xset, total, streak, best, missed, M: missed.length, xTotal: xset.size, doneToday: set.has(today), missedToday: xset.has(today), today };
   }
   function pomuInfo(h, today = todayStr()) {
     const st = habitStats(h, today);
@@ -404,12 +436,14 @@
 
   const STAMP_O = '<svg class="st-o" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="14.5"/></svg>';
   const STAMP_X = '<svg class="st-x" viewBox="0 0 40 40" aria-hidden="true"><path d="M9 9l22 22M31 9L9 31"/></svg>';
+  // 自分で押した「できなかった」の × スタンプ（〇とは別の色・太さ）
+  const STAMP_XM = '<svg class="st-xm" viewBox="0 0 40 40" aria-hidden="true"><path d="M11 11l18 18M29 11L11 29"/></svg>';
   function habitRow(h) {
     const i = pomuInfo(h);
     return `<div class="habit-row ${i.doneToday ? 'is-done' : ''}" data-habit="${h.id}">
       <a class="hr-main" href="#habits/${h.id}"><span class="hr-pomu"><img src="${pomuImg(i.key, true)}" alt="${esc(i.name)}" width="256" height="256" loading="lazy"></span>
         <span class="grow"><b class="hr-title">${esc(h.emoji)} ${esc(h.name)}</b><span class="hr-sub"><span class="hr-lv">Lv.${i.lv}</span> ${esc(i.name)}</span><span class="hr-sub">連続 ${i.streak}日・累計 ${i.total}日</span></span></a>
-      <button class="stamp-btn ${i.doneToday ? 'on' : ''}" data-action="habitToggle" data-id="${h.id}" aria-pressed="${i.doneToday}" aria-label="${esc(h.name)}：${i.doneToday ? '今日のスタンプを取り消す' : '今日のスタンプを押す'}">${STAMP_O}<span>${i.doneToday ? '済' : '押す'}</span></button>
+      <button class="stamp-btn ${i.doneToday ? 'on' : i.missedToday ? 'is-x' : ''}" data-action="habitToggle" data-id="${h.id}" aria-pressed="${i.doneToday}" aria-label="${esc(h.name)}：${i.doneToday ? '今日のスタンプを取り消す' : '今日のスタンプを押す'}">${i.missedToday ? STAMP_XM : STAMP_O}<span>${i.doneToday ? '済' : i.missedToday ? '' : '押す'}</span></button>
     </div>`;
   }
   function homeHabitsCard() {
@@ -448,11 +482,12 @@
       const ds = `${y}-${pad(m)}-${pad(d)}`;
       const dow = (lead + d - 1) % 7;
       const done = st.set.has(ds); const future = ds > st.today; const before = ds < h.startDate;
-      const missed = !done && !before && ds < st.today;
-      const cls = [done ? 'done' : '', missed ? 'missed' : '', ds === st.today ? 'today' : '', future ? 'future' : '', before ? 'before' : '', dow === 0 ? 'sun' : dow === 6 ? 'sat' : ''].join(' ');
-      const inner = `<span class="hc-num">${d}</span><span class="hc-mark">${done ? STAMP_O : missed ? STAMP_X : ''}</span>`;
+      const marked = !done && !before && !future && st.xset.has(ds); // 自分で × を押した日
+      const missed = !done && !before && (ds < st.today || marked);
+      const cls = [done ? 'done' : '', missed ? 'missed' : '', marked ? 'marked-x' : missed ? 'auto-x' : '', ds === st.today ? 'today' : '', future ? 'future' : '', before ? 'before' : '', dow === 0 ? 'sun' : dow === 6 ? 'sat' : ''].join(' ');
+      const inner = `<span class="hc-num">${d}</span><span class="hc-mark">${done ? STAMP_O : marked ? STAMP_XM : missed ? STAMP_X : ''}</span>`;
       if (future || before) cells.push(`<span class="hc-day ${cls}">${inner}</span>`);
-      else cells.push(`<button class="hc-day ${cls}" data-action="habitToggle" data-id="${h.id}" data-date="${ds}" aria-pressed="${done}" aria-label="${m}月${d}日${done ? '（スタンプ済み）' : missed ? '（お休み）' : ''}">${inner}</button>`);
+      else cells.push(`<button class="hc-day ${cls}" data-action="habitCycle" data-id="${h.id}" data-date="${ds}" aria-pressed="${done}" aria-label="${m}月${d}日${done ? '（できた）' : marked ? '（できなかった）' : missed ? '（スタンプなし）' : ''}・タップで 〇→×→なし">${inner}</button>`);
     }
     for (let k = 1; cells.length % 7; k++) cells.push(`<span class="hc-day other"><span class="hc-num">${k}</span></span>`);
     return cells.join('');
@@ -481,7 +516,12 @@
       <div class="pomu-next"><span>${i.next ? `Lv.${i.lv + 1}まで あと <b>${i.toNext}</b>日` : '最高レベル！'}</span><span class="muted small">累計 ${i.total}日</span></div>
       ${progressBar(i.next ? i.total - POMU_LV[i.lv - 1] : 1, i.next ? i.next - POMU_LV[i.lv - 1] : 1, 'pomu-progress')}
       ${i.hints.map((t) => `<p class="pomu-hint">${esc(t)}</p>`).join('')}
-      <button class="stamp-big ${i.doneToday ? 'on' : ''}" data-action="habitToggle" data-id="${h.id}" aria-pressed="${i.doneToday}">${STAMP_O}<span>${i.doneToday ? '今日のスタンプ済み' : '今日のスタンプを押す'}</span>${i.doneToday ? '<small>タップで取り消し</small>' : ''}</button>
+      <p class="stamp-q">今日はどうだった？</p>
+      <div class="stamp-pair">
+        <button class="stamp-big ${i.doneToday ? 'on' : ''}" data-action="habitMark" data-mark="done" data-id="${h.id}" aria-pressed="${i.doneToday}">${STAMP_O}<span>${i.doneToday ? 'できた！' : 'できた'}</span>${i.doneToday ? '<small>タップで取り消し</small>' : ''}</button>
+        <button class="stamp-miss ${i.missedToday ? 'on' : ''}" data-action="habitMark" data-mark="missed" data-id="${h.id}" aria-pressed="${i.missedToday}">${STAMP_XM}<span>できなかった</span>${i.missedToday ? '<small>タップで取り消し</small>' : ''}</button>
+      </div>
+      <p class="stamp-note">カレンダーの日付をタップすると 〇 → × → なし の順に切り替わります</p>
     </section>`);
     out.push(`<section class="card habit-cal">
       <div class="hc-head"><button class="icon-btn" data-action="habitMonth" data-id="${h.id}" data-dir="-1" aria-label="前の月" ${ym <= startYm ? 'disabled' : ''}>${ICON.back}</button>
@@ -498,6 +538,8 @@
       <div class="hs-circle streak"><span class="hs-n">${i.streak}<small>日</small></span><span class="hs-s">${i.doneToday || !i.streak ? '' : '今日押すと +1'}</span><span class="hs-l">現在の連続日数</span></div>
       <div class="hs-circle best"><span class="hs-n">${i.best}<small>日</small></span><span class="hs-s">${i.best && i.best === i.streak ? '記録更新中！' : ''}</span><span class="hs-l">最長連続</span></div>
     </section>`);
+    const mX = [...i.xset].filter((d) => d.startsWith(ym)).length;
+    out.push(`<section class="card hs-missed"><span class="hsm-mark">${STAMP_XM}</span><span class="grow"><b>できなかった日</b><span class="muted small">${m}月 ${mX}日・直近14日のお休み ${i.M}日（×とスタンプなし）</span></span><span class="hsm-n" id="missedCount">${i.xTotal}<small>日</small></span></section>`);
     return out.join('');
   }
   function viewZukan() {
@@ -518,20 +560,48 @@
     out.push('<p class="muted small center">レベルはスタンプの「累計日数」で決まります（連続でなくてもOK）。今日はまだ「お休み」にはなりません。</p>');
     return out.join('');
   }
-  function toggleHabitDay(id, date) {
+  // 日付の状態：'done'（〇）/ 'missed'（×）/ ''（なし）
+  const habitDayState = (h, ds) => (h.done.includes(ds) ? 'done' : (h.missed || []).includes(ds) ? 'missed' : '');
+  function setHabitDay(id, date, to) {
     const h = getHabit(id);
     if (!h) return;
     const today = todayStr();
     const ds = isDateStr(date) ? date : today;
     if (ds > today || ds < h.startDate) return;
-    const on = h.done.includes(ds);
-    h.done = on ? h.done.filter((d) => d !== ds) : [...h.done, ds].sort();
+    const from = habitDayState(h, ds);
+    if (from === to) return;
+    h.done = h.done.filter((d) => d !== ds);
+    h.missed = (h.missed || []).filter((d) => d !== ds);
+    if (to === 'done') h.done = [...h.done, ds].sort();
+    if (to === 'missed') h.missed = [...h.missed, ds].sort();
     h.updatedAt = nowIso();
     const r = updatePomu(h);
     save(); rerender();
+    const day = ds === today ? '今日' : fmtShort(ds);
     if (r.msg && r.msg.big) showPomuMsg(h, r.info, r.msg);
     else if (r.msg) toast(`${h.emoji} ${r.msg.text}`);
-    else toast(on ? 'スタンプを取り消しました' : `〇 ${ds === today ? '今日' : fmtShort(ds)}のスタンプ！（累計 ${r.info.total}日）`);
+    else if (to === 'done') toast(`〇 ${day}のスタンプ！（累計 ${r.info.total}日）`);
+    else if (to === 'missed') toast(`× ${day}は「できなかった」にしました。また明日から！`);
+    else toast(from === 'done' ? 'スタンプを取り消しました' : '× を取り消しました');
+  }
+  // 〇 の付け外し（ホームの「押す」ボタンなど）
+  function toggleHabitDay(id, date) {
+    const h = getHabit(id); if (!h) return;
+    const ds = isDateStr(date) ? date : todayStr();
+    setHabitDay(id, ds, habitDayState(h, ds) === 'done' ? '' : 'done');
+  }
+  // 「できた」「できなかった」ボタン：同じものをもう一度押すと取り消し
+  function markHabitDay(id, mark, date) {
+    const h = getHabit(id); if (!h) return;
+    const ds = isDateStr(date) ? date : todayStr();
+    const to = mark === 'missed' ? 'missed' : 'done';
+    setHabitDay(id, ds, habitDayState(h, ds) === to ? '' : to);
+  }
+  // カレンダーの日付：なし → 〇 → × → なし
+  function cycleHabitDay(id, date) {
+    const h = getHabit(id); if (!h) return;
+    const cur = habitDayState(h, date);
+    setHabitDay(id, date, cur === '' ? 'done' : cur === 'done' ? 'missed' : '');
   }
   function openHabitEditor(id) {
     const h = id ? getHabit(id) : null;

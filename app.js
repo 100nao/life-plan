@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.3.0';
+  const APP_VERSION = '1.3.1';
   const DEFAULT_CATEGORIES = ['旅行', '仕事/キャリア', '健康', '家族', '趣味', '学び', 'お金', 'その他'];
   const IMPORTANCE = { high: '高', mid: '中', low: '低' };
   const IMPORTANCE_ORDER = { high: 0, mid: 1, low: 2 };
@@ -142,8 +142,11 @@
   }
   function normJournal(j) {
     const t = nowIso();
-    return { id: j.id || uid(), date: isDateStr(j.date) ? j.date : todayStr(), text: String(j.text || ''), mood: [1, 2, 3, 4, 5].includes(Number(j.mood)) ? Number(j.mood) : 0, linked: Array.isArray(j.linked) ? j.linked.map(String) : [], source: ['photo', 'obsidian', 'ai'].includes(j.source) ? j.source : '', createdAt: j.createdAt || t, updatedAt: j.updatedAt || t };
+    return { id: j.id || uid(), date: isDateStr(j.date) ? j.date : todayStr(), text: String(j.text || ''), mood: [1, 2, 3, 4, 5].includes(Number(j.mood)) ? Number(j.mood) : 0, linked: Array.isArray(j.linked) ? j.linked.map(String) : [], photos: normPhotoIds(j.photos), source: ['photo', 'obsidian', 'ai'].includes(j.source) ? j.source : '', createdAt: j.createdAt || t, updatedAt: j.updatedAt || t };
   }
+  // ジャーナルの写真は id だけを持つ（画像本体は IndexedDB と非公開データリポジトリの data/photos/<id>.jpg）
+  const PHOTO_ID_RE = /^[A-Za-z0-9_-]{6,64}$/;
+  function normPhotoIds(a) { return Array.isArray(a) ? [...new Set(a.map(String).filter((x) => PHOTO_ID_RE.test(x)))].slice(0, 30) : []; }
   function normCoach(c) {
     const t = nowIso();
     return { id: c.id || uid(), date: isDateStr(c.date) ? c.date : todayStr(), title: String(c.title || ''), text: String(c.text || ''), read: c.read !== false, source: c.source || '', stepsResult: Array.isArray(c.stepsResult) ? c.stepsResult.map(String) : [], createdAt: c.createdAt || t, updatedAt: c.updatedAt || t };
@@ -158,9 +161,12 @@
     const t = nowIso();
     const done = [...new Set((Array.isArray(h.done) ? h.done : []).filter(isRealDay))].sort();
     const start = isRealDay(h.startDate) ? h.startDate : (done[0] || todayStr());
+    // missed は「できなかった（×）」を明示した日。同じ日に〇があれば〇を優先（排他的）
+    const doneSet = new Set(done);
+    const missed = [...new Set((Array.isArray(h.missed) ? h.missed : []).filter((d) => isRealDay(d) && !doneSet.has(d)))].sort();
     return {
       id: h.id || uid(), emoji: Array.from(String(h.emoji || '').trim()).slice(0, 4).join('') || '🌱', name: String(h.name || '').trim() || '（無題）',
-      startDate: start, done, seen: String(h.seen || ''), unlocked: Array.isArray(h.unlocked) ? [...new Set(h.unlocked.map(String))] : [],
+      startDate: start, done, missed, seen: String(h.seen || ''), unlocked: Array.isArray(h.unlocked) ? [...new Set(h.unlocked.map(String))] : [],
       createdAt: h.createdAt || t, updatedAt: h.updatedAt || t,
     };
   }
@@ -217,6 +223,8 @@
       next[k].forEach((x) => { if (prevMap.get(x.id) !== JSON.stringify(x)) { x.updatedAt = now; delete next.deleted[x.id]; } });
       prev[k].forEach((x) => { if (!nextIds.has(x.id)) next.deleted[x.id] = now; });
     });
+    // 元に戻したジャーナルの写真は削除扱いを取り消す
+    next.journal.forEach((e) => e.photos.forEach((p) => { delete next.deleted['photo:' + p]; }));
     if (JSON.stringify(next.categories) !== JSON.stringify(prev.categories)) next.categoriesAt = now;
     Object.keys(next.focus).forEach((y) => { if (next.focus[y] !== prev.focus[y]) next.focusAt[y] = now; });
     next.settings = prev.settings;
@@ -257,6 +265,7 @@
     laterSort: 'updated',
     matrixFilter: 'all',
     journalQuery: '',
+    journalOpen: new Set(), // 開いている日付（ジャーナル一覧）
     searchQuery: '',
     randomId: null,
     coachDays: 14,
@@ -628,23 +637,53 @@
   }
 
   // ───────────────────────── 画面: ジャーナル ─────────────────────────
+  // 日付ごとにまとめて、最初は折りたたみ。タップで開く（開いた日付は ui.journalOpen に覚えておく）
+  const SRC_LABEL = { photo: '📷 手書き', obsidian: '📝 Obsidian', ai: '🤖 AI' };
+  function journalEntry(e) {
+    return `<article class="card journal" data-action="editJournal" data-id="${e.id}" role="button" tabindex="0">
+        <div class="journal-head"><span class="mood" title="${MOOD_LABEL[e.mood] || ''}">${MOODS[e.mood] || '📝'}</span><b>${e.mood ? `気分 ${e.mood}/5` : 'メモ'}</b><span class="muted small">${e.createdAt ? pad(new Date(e.createdAt).getHours()) + ':' + pad(new Date(e.createdAt).getMinutes()) : ''}</span>${e.source ? `<span class="chip src-chip">${SRC_LABEL[e.source]}</span>` : ''}</div>
+        ${e.text ? `<p class="pre">${esc(e.text)}</p>` : ''}
+        ${photoThumbs(e.photos, e.id, false)}
+        ${e.linked.length ? `<div class="chips">${e.linked.map((id) => { const it = getItem(id); return it ? `<button class="chip link-chip" data-action="openItem" data-id="${it.id}">🔗 ${esc(trunc(it.title, 20))}</button>` : ''; }).join('')}</div>` : ''}
+      </article>`;
+  }
   function journalList(q) {
     const nq = q.trim().toLowerCase();
     const list = state.journal.filter((e) => !nq || e.text.toLowerCase().includes(nq) || e.date.includes(nq) || e.linked.some((id) => { const it = getItem(id); return it && it.title.toLowerCase().includes(nq); }))
       .sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
     if (!state.journal.length) return emptyState('ジャーナルはまだありません', 'その日の出来事、気分、考えたことを短く残しておきましょう。タスクと結びつけることもできます。', '<button class="btn primary" data-action="editJournal">＋ 今日を書く</button><button class="btn soft" data-action="pickPhoto">📷 写真から追加</button><button class="btn soft" data-action="openObsidian">📝 Obsidianから取り込む</button>');
     if (!list.length) return '<p class="muted center pad">見つかりませんでした。</p>';
+    const days = [];
+    list.forEach((e) => { const g = days[days.length - 1]; if (g && g.date === e.date) g.list.push(e); else days.push({ date: e.date, list: [e] }); });
     let html = ''; let cur = '';
-    list.forEach((e) => {
-      const m = e.date.slice(0, 7);
+    days.forEach(({ date, list: es }) => {
+      const m = date.slice(0, 7);
       if (m !== cur) { cur = m; html += `<h3 class="month-head">${Number(m.slice(0, 4))}年${Number(m.slice(5, 7))}月</h3>`; }
-      html += `<article class="card journal" data-action="editJournal" data-id="${e.id}" role="button" tabindex="0">
-        <div class="journal-head"><span class="mood" title="${MOOD_LABEL[e.mood] || ''}">${MOODS[e.mood] || '📝'}</span><b>${fmtDate(e.date)}</b>${e.mood ? `<span class="muted small">気分 ${e.mood}/5</span>` : ''}${e.source ? `<span class="chip src-chip">${{ photo: '📷 手書き', obsidian: '📝 Obsidian', ai: '🤖 AI' }[e.source]}</span>` : ''}</div>
-        <p class="pre">${esc(e.text)}</p>
-        ${e.linked.length ? `<div class="chips">${e.linked.map((id) => { const it = getItem(id); return it ? `<button class="chip link-chip" data-action="openItem" data-id="${it.id}">🔗 ${esc(trunc(it.title, 20))}</button>` : ''; }).join('')}</div>` : ''}
-      </article>`;
+      const open = !!nq || ui.journalOpen.has(date);
+      const first = es.find((e) => e.text.trim()) || es[0];
+      const preview = first.text.replace(/\s+/g, ' ').trim() || '（写真のみ）';
+      const nPhotos = es.reduce((a, e) => a + e.photos.length, 0);
+      const moods = [...new Set(es.map((e) => MOODS[e.mood]).filter(Boolean))].slice(0, 3).join('');
+      const srcs = [...new Set(es.map((e) => e.source).filter(Boolean))].map((x) => `<span class="chip src-chip">${SRC_LABEL[x]}</span>`).join('');
+      html += `<section class="jday${open ? ' open' : ''}" data-date="${date}">
+        <button type="button" class="jday-head card" data-action="toggleJDay" data-date="${date}" aria-expanded="${open}">
+          <span class="jd-date"><b>${fmtDate(date)}</b><span class="jd-meta"><span class="jd-count">${es.length}件</span>${nPhotos ? `<span class="jd-photos">📷 ${nPhotos}</span>` : ''}${moods ? `<span class="jd-moods">${moods}</span>` : ''}${srcs}</span></span>
+          <span class="jd-preview">${esc(trunc(preview, 80))}</span>
+          <svg class="jd-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="jday-body"${open ? '' : ' inert'}><div class="jday-in">${es.map(journalEntry).join('')}</div></div>
+      </section>`;
     });
     return html;
+  }
+  function toggleJournalDay(date, btn) {
+    const sec = btn ? btn.closest('.jday') : $(`.jday[data-date="${date}"]`);
+    if (!sec) return;
+    const open = !sec.classList.contains('open');
+    sec.classList.toggle('open', open);
+    if (btn) btn.setAttribute('aria-expanded', String(open));
+    const body = $('.jday-body', sec); if (body) body.toggleAttribute('inert', !open);
+    if (open) { ui.journalOpen.add(date); hydratePhotos(sec); } else ui.journalOpen.delete(date);
   }
   function viewJournal() {
     const recent = state.journal.filter((e) => e.mood && daysUntil(e.date) >= -13);
@@ -936,7 +975,9 @@
     const w = addDays(today, -14);
     const missed = [];
     for (let x = h.startDate > w ? h.startDate : w; x < today; x = addDays(x, 1)) if (!set.has(x)) missed.push(x);
-    return { set, total, streak, best, missed, M: missed.length, doneToday: set.has(today), today };
+    // ×（できなかった）を明示した日。進化の判定では「スタンプなし」と同じ扱い（missed に含まれる）
+    const xset = new Set((h.missed || []).filter((d) => d >= h.startDate && d <= today && !set.has(d)));
+    return { set, xset, total, streak, best, missed, M: missed.length, xTotal: xset.size, doneToday: set.has(today), missedToday: xset.has(today), today };
   }
   function pomuInfo(h, today = todayStr()) {
     const st = habitStats(h, today);
@@ -1018,12 +1059,14 @@
 
   const STAMP_O = '<svg class="st-o" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="14.5"/></svg>';
   const STAMP_X = '<svg class="st-x" viewBox="0 0 40 40" aria-hidden="true"><path d="M9 9l22 22M31 9L9 31"/></svg>';
+  // 自分で押した「できなかった」の × スタンプ（〇とは別の色・太さ）
+  const STAMP_XM = '<svg class="st-xm" viewBox="0 0 40 40" aria-hidden="true"><path d="M11 11l18 18M29 11L11 29"/></svg>';
   function habitRow(h) {
     const i = pomuInfo(h);
     return `<div class="habit-row ${i.doneToday ? 'is-done' : ''}" data-habit="${h.id}">
       <a class="hr-main" href="#habits/${h.id}"><span class="hr-pomu"><img src="${pomuImg(i.key, true)}" alt="${esc(i.name)}" width="256" height="256" loading="lazy"></span>
         <span class="grow"><b class="hr-title">${esc(h.emoji)} ${esc(h.name)}</b><span class="hr-sub"><span class="hr-lv">Lv.${i.lv}</span> ${esc(i.name)}</span><span class="hr-sub">連続 ${i.streak}日・累計 ${i.total}日</span></span></a>
-      <button class="stamp-btn ${i.doneToday ? 'on' : ''}" data-action="habitToggle" data-id="${h.id}" aria-pressed="${i.doneToday}" aria-label="${esc(h.name)}：${i.doneToday ? '今日のスタンプを取り消す' : '今日のスタンプを押す'}">${STAMP_O}<span>${i.doneToday ? '済' : '押す'}</span></button>
+      <button class="stamp-btn ${i.doneToday ? 'on' : i.missedToday ? 'is-x' : ''}" data-action="habitToggle" data-id="${h.id}" aria-pressed="${i.doneToday}" aria-label="${esc(h.name)}：${i.doneToday ? '今日のスタンプを取り消す' : '今日のスタンプを押す'}">${i.missedToday ? STAMP_XM : STAMP_O}<span>${i.doneToday ? '済' : i.missedToday ? '' : '押す'}</span></button>
     </div>`;
   }
   function homeHabitsCard() {
@@ -1062,11 +1105,12 @@
       const ds = `${y}-${pad(m)}-${pad(d)}`;
       const dow = (lead + d - 1) % 7;
       const done = st.set.has(ds); const future = ds > st.today; const before = ds < h.startDate;
-      const missed = !done && !before && ds < st.today;
-      const cls = [done ? 'done' : '', missed ? 'missed' : '', ds === st.today ? 'today' : '', future ? 'future' : '', before ? 'before' : '', dow === 0 ? 'sun' : dow === 6 ? 'sat' : ''].join(' ');
-      const inner = `<span class="hc-num">${d}</span><span class="hc-mark">${done ? STAMP_O : missed ? STAMP_X : ''}</span>`;
+      const marked = !done && !before && !future && st.xset.has(ds); // 自分で × を押した日
+      const missed = !done && !before && (ds < st.today || marked);
+      const cls = [done ? 'done' : '', missed ? 'missed' : '', marked ? 'marked-x' : missed ? 'auto-x' : '', ds === st.today ? 'today' : '', future ? 'future' : '', before ? 'before' : '', dow === 0 ? 'sun' : dow === 6 ? 'sat' : ''].join(' ');
+      const inner = `<span class="hc-num">${d}</span><span class="hc-mark">${done ? STAMP_O : marked ? STAMP_XM : missed ? STAMP_X : ''}</span>`;
       if (future || before) cells.push(`<span class="hc-day ${cls}">${inner}</span>`);
-      else cells.push(`<button class="hc-day ${cls}" data-action="habitToggle" data-id="${h.id}" data-date="${ds}" aria-pressed="${done}" aria-label="${m}月${d}日${done ? '（スタンプ済み）' : missed ? '（お休み）' : ''}">${inner}</button>`);
+      else cells.push(`<button class="hc-day ${cls}" data-action="habitCycle" data-id="${h.id}" data-date="${ds}" aria-pressed="${done}" aria-label="${m}月${d}日${done ? '（できた）' : marked ? '（できなかった）' : missed ? '（スタンプなし）' : ''}・タップで 〇→×→なし">${inner}</button>`);
     }
     for (let k = 1; cells.length % 7; k++) cells.push(`<span class="hc-day other"><span class="hc-num">${k}</span></span>`);
     return cells.join('');
@@ -1095,7 +1139,12 @@
       <div class="pomu-next"><span>${i.next ? `Lv.${i.lv + 1}まで あと <b>${i.toNext}</b>日` : '最高レベル！'}</span><span class="muted small">累計 ${i.total}日</span></div>
       ${progressBar(i.next ? i.total - POMU_LV[i.lv - 1] : 1, i.next ? i.next - POMU_LV[i.lv - 1] : 1, 'pomu-progress')}
       ${i.hints.map((t) => `<p class="pomu-hint">${esc(t)}</p>`).join('')}
-      <button class="stamp-big ${i.doneToday ? 'on' : ''}" data-action="habitToggle" data-id="${h.id}" aria-pressed="${i.doneToday}">${STAMP_O}<span>${i.doneToday ? '今日のスタンプ済み' : '今日のスタンプを押す'}</span>${i.doneToday ? '<small>タップで取り消し</small>' : ''}</button>
+      <p class="stamp-q">今日はどうだった？</p>
+      <div class="stamp-pair">
+        <button class="stamp-big ${i.doneToday ? 'on' : ''}" data-action="habitMark" data-mark="done" data-id="${h.id}" aria-pressed="${i.doneToday}">${STAMP_O}<span>${i.doneToday ? 'できた！' : 'できた'}</span>${i.doneToday ? '<small>タップで取り消し</small>' : ''}</button>
+        <button class="stamp-miss ${i.missedToday ? 'on' : ''}" data-action="habitMark" data-mark="missed" data-id="${h.id}" aria-pressed="${i.missedToday}">${STAMP_XM}<span>できなかった</span>${i.missedToday ? '<small>タップで取り消し</small>' : ''}</button>
+      </div>
+      <p class="stamp-note">カレンダーの日付をタップすると 〇 → × → なし の順に切り替わります</p>
     </section>`);
     out.push(`<section class="card habit-cal">
       <div class="hc-head"><button class="icon-btn" data-action="habitMonth" data-id="${h.id}" data-dir="-1" aria-label="前の月" ${ym <= startYm ? 'disabled' : ''}>${ICON.back}</button>
@@ -1112,6 +1161,8 @@
       <div class="hs-circle streak"><span class="hs-n">${i.streak}<small>日</small></span><span class="hs-s">${i.doneToday || !i.streak ? '' : '今日押すと +1'}</span><span class="hs-l">現在の連続日数</span></div>
       <div class="hs-circle best"><span class="hs-n">${i.best}<small>日</small></span><span class="hs-s">${i.best && i.best === i.streak ? '記録更新中！' : ''}</span><span class="hs-l">最長連続</span></div>
     </section>`);
+    const mX = [...i.xset].filter((d) => d.startsWith(ym)).length;
+    out.push(`<section class="card hs-missed"><span class="hsm-mark">${STAMP_XM}</span><span class="grow"><b>できなかった日</b><span class="muted small">${m}月 ${mX}日・直近14日のお休み ${i.M}日（×とスタンプなし）</span></span><span class="hsm-n" id="missedCount">${i.xTotal}<small>日</small></span></section>`);
     return out.join('');
   }
   function viewZukan() {
@@ -1132,20 +1183,48 @@
     out.push('<p class="muted small center">レベルはスタンプの「累計日数」で決まります（連続でなくてもOK）。今日はまだ「お休み」にはなりません。</p>');
     return out.join('');
   }
-  function toggleHabitDay(id, date) {
+  // 日付の状態：'done'（〇）/ 'missed'（×）/ ''（なし）
+  const habitDayState = (h, ds) => (h.done.includes(ds) ? 'done' : (h.missed || []).includes(ds) ? 'missed' : '');
+  function setHabitDay(id, date, to) {
     const h = getHabit(id);
     if (!h) return;
     const today = todayStr();
     const ds = isDateStr(date) ? date : today;
     if (ds > today || ds < h.startDate) return;
-    const on = h.done.includes(ds);
-    h.done = on ? h.done.filter((d) => d !== ds) : [...h.done, ds].sort();
+    const from = habitDayState(h, ds);
+    if (from === to) return;
+    h.done = h.done.filter((d) => d !== ds);
+    h.missed = (h.missed || []).filter((d) => d !== ds);
+    if (to === 'done') h.done = [...h.done, ds].sort();
+    if (to === 'missed') h.missed = [...h.missed, ds].sort();
     h.updatedAt = nowIso();
     const r = updatePomu(h);
     save(); rerender();
+    const day = ds === today ? '今日' : fmtShort(ds);
     if (r.msg && r.msg.big) showPomuMsg(h, r.info, r.msg);
     else if (r.msg) toast(`${h.emoji} ${r.msg.text}`);
-    else toast(on ? 'スタンプを取り消しました' : `〇 ${ds === today ? '今日' : fmtShort(ds)}のスタンプ！（累計 ${r.info.total}日）`);
+    else if (to === 'done') toast(`〇 ${day}のスタンプ！（累計 ${r.info.total}日）`);
+    else if (to === 'missed') toast(`× ${day}は「できなかった」にしました。また明日から！`);
+    else toast(from === 'done' ? 'スタンプを取り消しました' : '× を取り消しました');
+  }
+  // 〇 の付け外し（ホームの「押す」ボタンなど）
+  function toggleHabitDay(id, date) {
+    const h = getHabit(id); if (!h) return;
+    const ds = isDateStr(date) ? date : todayStr();
+    setHabitDay(id, ds, habitDayState(h, ds) === 'done' ? '' : 'done');
+  }
+  // 「できた」「できなかった」ボタン：同じものをもう一度押すと取り消し
+  function markHabitDay(id, mark, date) {
+    const h = getHabit(id); if (!h) return;
+    const ds = isDateStr(date) ? date : todayStr();
+    const to = mark === 'missed' ? 'missed' : 'done';
+    setHabitDay(id, ds, habitDayState(h, ds) === to ? '' : to);
+  }
+  // カレンダーの日付：なし → 〇 → × → なし
+  function cycleHabitDay(id, date) {
+    const h = getHabit(id); if (!h) return;
+    const cur = habitDayState(h, date);
+    setHabitDay(id, date, cur === '' ? 'done' : cur === 'done' ? 'missed' : '');
   }
   function openHabitEditor(id) {
     const h = id ? getHabit(id) : null;
@@ -1263,6 +1342,8 @@
     const r = route();
     const y = window.scrollY;
     main.innerHTML = VIEWS[r.name](r.arg);
+    updateTopPomu();
+    hydratePhotos(main);
     $$('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === r.name));
     const n = state.items.filter((i) => i.list === 'inbox' && i.status !== 'done').length;
     const badge = $('#inboxBadge'); badge.hidden = !n; badge.textContent = n > 99 ? '99+' : n;
@@ -1295,6 +1376,26 @@
   }
   window.addEventListener('resize', () => moveTabIndicator(false));
   window.addEventListener('scroll', () => { document.body.classList.toggle('scrolled', window.scrollY > 8); }, { passive: true });
+  // トップバーの中央：いちばん育っている ぽむ（同じレベルなら最近スタンプした目標）
+  function topPomu() {
+    let best = null;
+    state.habits.forEach((h) => {
+      const i = pomuInfo(h);
+      const last = h.done.length ? h.done[h.done.length - 1] : '';
+      if (!best || i.lv > best.lv || (i.lv === best.lv && last > best.last)) best = { h, lv: i.lv, last, key: i.key, name: i.name };
+    });
+    return best || { h: null, lv: 1, last: '', key: 'stage-1', name: POMU['stage-1'].name };
+  }
+  function updateTopPomu() {
+    const img = $('#topPomu'); if (!img) return;
+    const p = topPomu();
+    const src = pomuImg(p.key, true);
+    if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+    img.dataset.key = p.key;
+    const a = img.closest('a');
+    if (a) { a.setAttribute('aria-label', p.h ? `${p.name}（Lv.${p.lv}・${p.h.name}）：習慣スタンプへ` : 'ぽむたま：習慣スタンプへ'); a.title = p.h ? `${p.name} Lv.${p.lv}` : 'ぽむたま'; }
+    img.alt = p.name;
+  }
   // ドロワー（ハンバーガーメニュー）
   const drawer = $('#drawer'); const drawerBd = $('#drawerBackdrop');
   function openDrawer() {
@@ -1312,6 +1413,97 @@
   }
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && document.body.classList.contains('drawer-open')) closeDrawer(); });
   drawer.addEventListener('click', (e) => { if (e.target.closest('a[href]')) closeDrawer(); });
+  // スワイプ：右から左へなぞるとメニューが出る／左から右へで閉じる（指に合わせて動く）
+  const isDrawerOpen = () => document.body.classList.contains('drawer-open');
+  function swipeBlocked(t) {
+    if (!t || !t.closest) return true;
+    if (t.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"], .modal-backdrop:not([hidden]), .photo-viewer, .pomu-celebrate')) return true;
+    if (!backdrop.hidden) return true;
+    for (let el = t; el && el !== document.body; el = el.parentElement) {
+      if (el.scrollWidth > el.clientWidth + 2) { const ox = getComputedStyle(el).overflowX; if (ox === 'auto' || ox === 'scroll') return true; }
+    }
+    return false;
+  }
+  const sw = { on: false, x: 0, y: 0, t: 0, lock: '', open: false, w: 0 };
+  function swipeReset() { drawer.style.transform = ''; drawer.style.transition = ''; drawerBd.style.opacity = ''; drawerBd.style.transition = ''; document.body.classList.remove('drawer-dragging'); }
+  document.addEventListener('touchstart', (e) => {
+    sw.on = false;
+    if (e.touches.length !== 1 || window.matchMedia('(min-width: 960px)').matches) return;
+    const open = isDrawerOpen();
+    if (!open && swipeBlocked(e.target)) return;
+    const p = e.touches[0];
+    Object.assign(sw, { on: true, x: p.clientX, y: p.clientY, t: Date.now(), lock: '', open, w: drawer.offsetWidth || 300 });
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (!sw.on) return;
+    const p = e.touches[0]; const dx = p.clientX - sw.x; const dy = p.clientY - sw.y;
+    if (!sw.lock) {
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+      sw.lock = Math.abs(dx) > Math.abs(dy) * 1.5 && (sw.open ? dx > 0 : dx < 0) ? 'h' : 'v';
+      if (sw.lock === 'h') {
+        if (!sw.open) { drawerBd.hidden = false; drawer.removeAttribute('inert'); }
+        drawer.style.transition = 'none'; drawerBd.style.transition = 'none'; document.body.classList.add('drawer-dragging');
+      }
+    }
+    if (sw.lock !== 'h') return;
+    const off = sw.open ? Math.max(0, Math.min(sw.w, dx)) : Math.max(0, Math.min(sw.w, sw.w + dx)); // 0 = 全開
+    drawer.style.transform = `translateX(${off}px)`;
+    drawerBd.style.opacity = String(1 - off / sw.w);
+  }, { passive: true });
+  function swipeEnd(e) {
+    if (!sw.on) return;
+    sw.on = false;
+    const p = (e.changedTouches && e.changedTouches[0]) || { clientX: sw.x, clientY: sw.y };
+    const dx = p.clientX - sw.x; const dy = p.clientY - sw.y;
+    const horiz = Math.abs(dx) > Math.abs(dy) * 1.5;
+    const fast = Date.now() - sw.t < 300 && Math.abs(dx) > 30;
+    const dragged = sw.lock === 'h';
+    let act = '';
+    if (e.type !== 'touchcancel') {
+      if (!sw.open && horiz && (dx < -60 || (fast && dx < 0) || (dragged && dx < -sw.w / 3))) act = 'open';
+      else if (sw.open && horiz && (dx > 60 || (fast && dx > 0) || (dragged && dx > sw.w / 3))) act = 'close';
+    }
+    if (act === 'open') { document.body.classList.add('drawer-open'); openDrawer(); }
+    if (act === 'close') closeDrawer();
+    if (dragged) swipeReset(); // 指を離した位置から、続きをアニメーション
+    if (dragged && !sw.open && act !== 'open') { drawer.setAttribute('inert', ''); setTimeout(() => { if (!isDrawerOpen()) drawerBd.hidden = true; }, 320); }
+  }
+  document.addEventListener('touchend', swipeEnd, { passive: true });
+  document.addEventListener('touchcancel', swipeEnd, { passive: true });
+  // 「アップデート」：最新版を取りに行き、キャッシュを消して読み込み直す（データは localStorage にあるので消えない）
+  let updating = false;
+  async function forceUpdate() {
+    if (updating) return;
+    updating = true;
+    toast('最新版を確認しています…');
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    try {
+      if (sync.connected && sync.dirty && navigator.onLine) await Promise.race([syncNow(), wait(4000)]); // 未送信の変更を先に保存
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(async (reg) => {
+          try { await reg.update(); } catch (e) { /* オフラインなど */ }
+          const w = reg.waiting || reg.installing;
+          if (w) w.postMessage('skipWaiting');
+        }));
+      }
+      if (window.caches) { const keys = await caches.keys(); await Promise.all(keys.map((k) => caches.delete(k))); }
+    } catch (e) { /* 失敗しても読み込み直す */ }
+    try { sessionStorage.setItem('lifeplan.updated', APP_VERSION); } catch (e) { /* noop */ }
+    await wait(500);
+    const u = new URL(location.href);
+    u.searchParams.set('v', String(Date.now()));
+    location.replace(u.toString());
+  }
+  // アップデート後：URL の ?v= を消して、バージョンを知らせる
+  function afterUpdate() {
+    let prev = null; try { prev = sessionStorage.getItem('lifeplan.updated'); sessionStorage.removeItem('lifeplan.updated'); } catch (e) { /* noop */ }
+    if (/[?&]v=/.test(location.search)) {
+      const u = new URL(location.href); u.searchParams.delete('v');
+      try { history.replaceState(history.state, '', u.pathname + u.search + u.hash); } catch (e) { /* noop */ }
+    }
+    if (prev) setTimeout(() => toast(prev === APP_VERSION ? `最新版です（バージョン ${APP_VERSION}）` : `バージョン ${APP_VERSION} に更新しました ✓`), 300);
+  }
   // 同期などバックグラウンドの更新：入力中・モーダル表示中は描画を後回し
   function rerenderSoft() {
     const a = document.activeElement;
@@ -1495,27 +1687,35 @@
   function openJournalEditor(id) {
     const e = id ? state.journal.find((x) => x.id === id) : null;
     const v = e || { date: todayStr(), text: '', mood: 3, linked: [] };
+    startJournalEdit(e);
     const candidates = state.items.filter((i) => i.status !== 'done' || v.linked.includes(i.id)).sort((a, b) => (v.linked.includes(b.id) - v.linked.includes(a.id)) || b.updatedAt.localeCompare(a.updatedAt));
     openModal(`${modalHead(e ? 'ジャーナルを編集' : 'ジャーナルを書く')}
       <form data-form="journal" data-id="${e ? e.id : ''}">
         <label class="field"><span class="field-label">日付</span><input type="date" name="date" value="${esc(v.date)}" required></label>
         <div class="field"><span class="field-label">気分</span><div class="mood-pick">${[1, 2, 3, 4, 5].map((n) => `<label title="${MOOD_LABEL[n]}"><input type="radio" name="mood" value="${n}" ${Number(v.mood) === n ? 'checked' : ''}><span>${MOODS[n]}<small>${n}</small></span></label>`).join('')}</div></div>
         <label class="field"><span class="field-label">内容</span><textarea name="text" rows="6" placeholder="今日あったこと、考えたこと、気づいたこと…" ${e ? '' : 'autofocus'}>${esc(v.text)}</textarea></label>
+        <div class="field j-photo-field"><span class="field-label">写真（任意）<small class="muted" id="jPhotoCount">${jEdit.photos.length ? jEdit.photos.length + '枚' : ''}</small></span>
+          <div id="jPhotoBox">${photoThumbs(jEdit.photos, '', true)}</div>
+          <label class="btn soft small photo-add">📷 写真を追加<input type="file" id="jPhotoInput" accept="image/*" multiple hidden data-change="journalEntryPhoto"></label>
+          <p class="muted small">長い辺1280pxに縮小してこの端末に保存します。GitHub 同期中は非公開のデータリポジトリにも保存し、他の端末でも見られます。</p></div>
         ${candidates.length ? `<div class="field"><span class="field-label">関連するタスク（任意）</span>
           <input class="link-filter" placeholder="絞り込み" data-input="linkFilter" aria-label="タスクを絞り込み">
           <div class="link-list">${candidates.map((i) => `<label class="link-opt" data-title="${esc(i.title.toLowerCase())}"><input type="checkbox" name="linked" value="${i.id}" ${v.linked.includes(i.id) ? 'checked' : ''}><span>${esc(i.title)}</span><small>${LISTS[i.list]}</small></label>`).join('')}</div></div>` : ''}
         <div class="btn-row between">${e ? `<button type="button" class="btn ghost danger" data-action="deleteJournal" data-id="${e.id}">削除</button>` : '<span></span>'}
           <span class="btn-row"><button type="button" class="btn ghost" data-action="closeModal">キャンセル</button><button class="btn primary" type="submit">保存</button></span></div>
-      </form>`);
+      </form>`, { onOpen: (box) => hydratePhotos(box), onClose: () => endJournalEdit() });
   }
   function submitJournal(form) {
     const fd = new FormData(form);
     const text = String(fd.get('text') || '').trim();
-    if (!text) { toast('内容を入力してください'); return; }
-    const data = { date: fd.get('date') || todayStr(), text, mood: Number(fd.get('mood')) || 0, linked: fd.getAll('linked').map(String) };
+    if (jEdit.busy) { toast('写真を処理しています。少し待ってから保存してください'); return; }
+    if (!text && !jEdit.photos.length) { toast('内容を入力してください'); return; }
     const e = state.journal.find((x) => x.id === form.dataset.id);
+    const data = { date: isDateStr(String(fd.get('date'))) ? String(fd.get('date')) : todayStr(), text, mood: Number(fd.get('mood')) || 0, linked: fd.getAll('linked').map(String) };
+    data.photos = commitEditorPhotos(e ? e.photos : []);
     if (e) Object.assign(e, data, { updatedAt: nowIso() });
     else state.journal.push(normJournal(data));
+    ui.journalOpen.add(data.date);
     data.linked.forEach((id) => { const it = getItem(id); if (it) touch(it, true); }); // ジャーナルで触れた＝進捗あり
     save(); closeModal(); rerender(); toast('ジャーナルを保存しました');
   }
@@ -1968,6 +2168,7 @@
         }
         await pullCoachInbox();
         sync.lastSyncAt = nowIso(); sync.lastError = ''; saveSync(); setSyncState('ok');
+        photoSyncSoon(400);
       } catch (e) {
         sync.lastError = e.message || String(e); saveSync();
         setSyncState(e.network || !navigator.onLine ? 'offline' : 'error');
@@ -2336,7 +2537,7 @@
       const t = $('.photo-loading .photo-thumb'); if (t) t.outerHTML = `<img class="photo-thumb" src="${img.thumb}" alt="選んだ写真">`;
       const reply = await callGemini([{ role: 'user', parts: [{ inline_data: { mime_type: 'image/jpeg', data: img.full.split(',')[1] } }, { text: PHOTO_PROMPT.replace('TODAY', todayStr()) }] }], { json: true, temperature: 0.1, maxTokens: 4096 });
       if (backdrop.hidden) return; // 途中で閉じた
-      photo.cur = { thumb, name: file.name, ...parsePhotoResult(reply) };
+      photo.cur = { thumb, name: file.name, file, ...parsePhotoResult(reply) };
       photo.busy = false;
       openPhotoReview();
     } catch (e) {
@@ -2357,7 +2558,8 @@
     openModal(`${modalHead('読み取り結果を確認' + photoStepLabel())}
       <form data-form="photoJournal" class="photo-review">
         <img class="photo-thumb" src="${c.thumb}" alt="読み取った写真" data-action="photoZoom">
-        <p class="muted small">写真そのものは保存されません（文字だけ保存）。内容を確認・修正してから保存してください。</p>
+        <p class="muted small">内容を確認・修正してから保存してください。写真は、下のチェックを入れたときだけジャーナルに添付します。</p>
+        <label class="check-line"><input type="checkbox" name="keepPhoto" value="1"> <span>この写真もジャーナルに添付する</span></label>
         <label class="field"><span class="field-label">日付${c.date ? '<small class="ok-text">（ページの日付を検出）</small>' : ''}</span><input type="date" name="date" value="${esc(c.date || todayStr())}" required></label>
         <div class="field"><span class="field-label">気分（任意）</span><div class="mood-pick">${[1, 2, 3, 4, 5].map((n) => `<label title="${MOOD_LABEL[n]}"><input type="radio" name="mood" value="${n}"><span>${MOODS[n]}<small>${n}</small></span></label>`).join('')}</div></div>
         <label class="field"><span class="field-label">書き起こし</span><textarea name="text" rows="10">${esc(c.text)}</textarea></label>
@@ -2387,12 +2589,254 @@
     if (!text) { toast('内容が空です'); return; }
     const date = isDateStr(String(fd.get('date'))) ? String(fd.get('date')) : todayStr();
     const dup = state.journal.some((e) => e.date === date && e.text.trim() === text);
-    if (!dup) state.journal.push(normJournal({ date, text, mood: Number(fd.get('mood')) || 0, source: 'photo' }));
+    const entry = dup ? null : normJournal({ date, text, mood: Number(fd.get('mood')) || 0, source: 'photo' });
+    if (entry) state.journal.push(entry);
+    const file = photo.cur && photo.cur.file;
+    if (entry && file && fd.get('keepPhoto')) {
+      makePhotoRecord(file).then((rec) => photoPut(rec).then(() => {
+        const e = state.journal.find((x) => x.id === entry.id); if (!e) { photoDel(rec.id).catch(() => {}); return; }
+        e.photos = [...e.photos, rec.id]; e.updatedAt = nowIso(); save(); rerenderSoft();
+      })).catch((err) => toast('⚠️ 写真を添付できませんでした：' + (err.message || err)));
+    }
     const t = nowIso(); let nt = 0;
     fd.getAll('task').map(String).forEach((title) => { if (!state.items.some((i) => norm(i.title) === norm(title))) { state.items.unshift(normItem({ title: trunc(title, 120), list: 'inbox', source: 'photo', createdAt: t, updatedAt: t })); nt++; } });
     save(); rerender();
     toast(dup ? '同じ内容のジャーナルが既にあるため、保存しませんでした' : `ジャーナルを保存しました${nt ? `（未整理に ${nt}件 追加）` : ''}`);
     if (photo.queue.length) nextPhoto(); else { photo.cur = null; closeModal(); }
+  }
+
+  // ───────────────────────── ジャーナルの写真（v1.3.1） ─────────────────────────
+  // 画像本体はこの端末の IndexedDB（lifeplan-photos）に保存し、state のジャーナルには写真の id だけを持たせる。
+  // GitHub 同期中は、非公開のデータリポジトリの data/photos/<id>.jpg に1枚ずつ保存（公開リポジトリには保存しない）。
+  // 他の端末では、id はあるのに本体が無い写真を GitHub から読み込む。削除は「photo:<id>」の削除記録で全端末に伝える。
+  const PHOTO_MAX = 1280; const PHOTO_Q = 0.7; const PHOTO_THUMB = 360; const PHOTO_LIMIT = 12;
+  const PHOTO_GRACE = 120000; // 削除してから実際に消すまでの猶予（「元に戻す」のため）
+  let photoDbP = null;
+  function photoDb() {
+    if (photoDbP) return photoDbP;
+    photoDbP = new Promise((resolve, reject) => {
+      if (!window.indexedDB) { reject(new Error('この端末では写真を保存できません')); return; }
+      const rq = indexedDB.open('lifeplan-photos', 1);
+      rq.onupgradeneeded = () => { const db = rq.result; if (!db.objectStoreNames.contains('photos')) db.createObjectStore('photos', { keyPath: 'id' }); };
+      rq.onsuccess = () => resolve(rq.result);
+      rq.onerror = () => reject(rq.error || new Error('写真の保存領域を開けませんでした'));
+    });
+    photoDbP.catch(() => { photoDbP = null; });
+    return photoDbP;
+  }
+  async function idbDo(mode, fn) {
+    const db = await photoDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('photos', mode); const rq = fn(tx.objectStore('photos')); let val;
+      if (rq) rq.onsuccess = () => { val = rq.result; };
+      tx.oncomplete = () => resolve(val);
+      tx.onerror = () => reject(tx.error || new Error('写真を保存できませんでした'));
+      tx.onabort = () => reject(tx.error || new Error('写真を保存できませんでした（容量不足の可能性）'));
+    });
+  }
+  const photoGet = (id) => idbDo('readonly', (st) => st.get(id));
+  const photoPut = (rec) => idbDo('readwrite', (st) => st.put(rec));
+  const photoDel = (id) => idbDo('readwrite', (st) => st.delete(id));
+  const photoAll = () => idbDo('readonly', (st) => st.getAll());
+  function dataUrlBytes(u) { const b = atob(u.split(',')[1]); const a = new Uint8Array(b.length); for (let k = 0; k < b.length; k++) a[k] = b.charCodeAt(k); return a; }
+  function bytesB64(bytes) { let bin = ''; for (let k = 0; k < bytes.length; k += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(k, k + 0x8000)); return btoa(bin); }
+  function b64Bytes(b64) { const bin = atob(String(b64).replace(/\s/g, '')); const a = new Uint8Array(bin.length); for (let k = 0; k < bin.length; k++) a[k] = bin.charCodeAt(k); return a; }
+  // 長い辺 1280px・JPEG 品質 0.7 に縮小（手書き読み取りと同じ loadImageFile / drawScaled を使う）
+  async function makePhotoRecord(file, id = uid()) {
+    const { img, done } = await loadImageFile(file);
+    try {
+      return { id, full: dataUrlBytes(drawScaled(img, PHOTO_MAX, PHOTO_Q)).buffer, thumb: dataUrlBytes(drawScaled(img, PHOTO_THUMB, 0.72)).buffer, createdAt: nowIso(), synced: false };
+    } finally { done(); }
+  }
+  async function recordFromBytes(id, bytes) {
+    const { img, done } = await loadImageFile(new Blob([bytes], { type: 'image/jpeg' }));
+    try { return { id, full: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), thumb: dataUrlBytes(drawScaled(img, PHOTO_THUMB, 0.72)).buffer, createdAt: nowIso(), synced: true }; } finally { done(); }
+  }
+  const photoUrls = new Map(); // id → { thumb, full }（blob: URL）
+  function photoUrl(rec, kind) {
+    let c = photoUrls.get(rec.id); if (!c) { c = {}; photoUrls.set(rec.id, c); }
+    if (!c[kind]) c[kind] = URL.createObjectURL(new Blob([rec[kind]], { type: 'image/jpeg' }));
+    return c[kind];
+  }
+  function forgetPhotoUrl(id) { const c = photoUrls.get(id); if (c) { Object.values(c).forEach((u) => URL.revokeObjectURL(u)); photoUrls.delete(id); } }
+  const cachedThumb = (id) => (photoUrls.get(id) || {}).thumb || '';
+  // サムネイルの並び（editable：編集画面の「外す」ボタン付き）
+  function photoThumbs(ids, entryId, editable) {
+    if (!ids || !ids.length) return '';
+    return `<div class="j-photos">${ids.map((id) => `<div class="j-photo${cachedThumb(id) ? '' : ' loading'}"><button type="button" class="j-photo-view" data-action="viewPhoto" data-photo-id="${id}" data-entry="${editable ? '' : entryId || ''}" aria-label="写真を大きく表示"><img data-photo="${id}" alt="" ${cachedThumb(id) ? `src="${cachedThumb(id)}"` : ''}></button>${editable ? `<button type="button" class="j-photo-del" data-action="removeEditorPhoto" data-photo-id="${id}" aria-label="この写真を外す">×</button>` : ''}</div>`).join('')}</div>`;
+  }
+  async function hydratePhotos(root = document) {
+    const imgs = $$('img[data-photo]:not([src])', root);
+    if (!imgs.length) return;
+    let missing = 0;
+    for (const im of imgs) {
+      const box = im.closest('.j-photo');
+      try {
+        const rec = await photoGet(im.dataset.photo);
+        if (rec) { im.src = photoUrl(rec, 'thumb'); if (box) box.classList.remove('loading', 'missing'); } else { missing++; if (box) { box.classList.remove('loading'); box.classList.add('missing'); } }
+      } catch (e) { if (box) { box.classList.remove('loading'); box.classList.add('missing'); } }
+    }
+    if (missing && sync.connected && sync.token && navigator.onLine) photoSyncSoon(300);
+  }
+  const referencedPhotos = () => new Set(state.journal.flatMap((e) => e.photos || []));
+  function tombPhoto(id) { state.deleted['photo:' + id] = nowIso(); }
+
+  // 拡大表示
+  async function viewPhoto(id, entryId) {
+    let rec = null; try { rec = await photoGet(id); } catch (e) { /* noop */ }
+    if (!rec) {
+      if (sync.connected && sync.token) { toast('写真を GitHub から読み込んでいます…'); await syncPhotos(); try { rec = await photoGet(id); } catch (e) { /* noop */ } }
+      if (!rec) { toast(sync.connected ? '写真を読み込めませんでした。少し待ってからもう一度お試しください' : 'この端末には写真がありません（GitHub 同期をすると他の端末の写真も見られます）'); return; }
+    }
+    const old = $('#photoViewer'); if (old) old.remove();
+    const el = document.createElement('div');
+    el.id = 'photoViewer'; el.className = 'photo-viewer'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', '写真');
+    el.innerHTML = `<img class="pv-img" src="${photoUrl(rec, 'full')}" alt="ジャーナルの写真"><div class="pv-bar"><button type="button" class="btn soft small" data-pv="close">閉じる</button>${entryId ? '<button type="button" class="btn danger small" data-pv="del">🗑 この写真を削除</button>' : ''}</div>`;
+    const close = () => { el.classList.add('out'); setTimeout(() => el.remove(), 200); document.removeEventListener('keydown', onKey); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+    el.addEventListener('click', (e) => { const b = e.target.closest('[data-pv]'); close(); if (b && b.dataset.pv === 'del') deleteEntryPhoto(entryId, id); });
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(el);
+  }
+  async function deleteEntryPhoto(entryId, id) {
+    const e = state.journal.find((x) => x.id === entryId);
+    if (!e || !e.photos.includes(id)) return;
+    if (!(await confirmDialog('この写真をジャーナルから削除しますか？（GitHub 同期中は他の端末からも消えます）', '削除する', true))) return;
+    const snap = snapshot();
+    e.photos = e.photos.filter((p) => p !== id); e.updatedAt = nowIso(); tombPhoto(id);
+    save(); rerender(); undoable('写真を削除しました', snap);
+    setTimeout(() => photoGc(), PHOTO_GRACE + 1000);
+  }
+
+  // 編集画面の写真（保存するまでは確定しない）
+  const jEdit = { photos: [], added: [], saved: false, busy: 0 };
+  function startJournalEdit(e) { jEdit.photos = e ? [...e.photos] : []; jEdit.added = []; jEdit.saved = false; jEdit.busy = 0; }
+  function endJournalEdit() {
+    if (!jEdit.saved) jEdit.added.forEach((id) => { photoDel(id).catch(() => {}); forgetPhotoUrl(id); });
+    jEdit.added = [];
+  }
+  function refreshEditorPhotos() {
+    const box = $('#jPhotoBox', modalBox); if (!box) return;
+    box.innerHTML = photoThumbs(jEdit.photos, '', true) + (jEdit.busy ? `<p class="muted small"><span class="dots"><i></i><i></i><i></i></span> 写真を縮小しています…（${jEdit.busy}枚）</p>` : '');
+    const c = $('#jPhotoCount', modalBox); if (c) c.textContent = jEdit.photos.length ? `${jEdit.photos.length}枚` : '';
+    hydratePhotos(box);
+  }
+  async function addEditorPhotos(files) {
+    files = [...files].filter((f) => /^image\//.test(f.type) || /\.(heic|heif|jpe?g|png|webp)$/i.test(f.name));
+    if (!files.length) { toast('画像ファイルを選んでください'); return; }
+    const room = PHOTO_LIMIT - jEdit.photos.length;
+    if (room <= 0) { toast(`写真は1件につき${PHOTO_LIMIT}枚までです`); return; }
+    if (files.length > room) { toast(`写真は1件につき${PHOTO_LIMIT}枚までです（${room}枚だけ追加します）`); files = files.slice(0, room); }
+    jEdit.busy += files.length; refreshEditorPhotos();
+    let failed = '';
+    for (const f of files) {
+      try {
+        const rec = await makePhotoRecord(f);
+        await photoPut(rec);
+        if (backdrop.hidden || !$('#jPhotoBox', modalBox)) { photoDel(rec.id).catch(() => {}); continue; } // 途中で閉じた
+        photoUrl(rec, 'thumb');
+        jEdit.photos.push(rec.id); jEdit.added.push(rec.id);
+      } catch (e) { failed = e.message || String(e); }
+      jEdit.busy--; refreshEditorPhotos();
+    }
+    if (failed) toast('⚠️ ' + failed);
+  }
+  function removeEditorPhoto(id) { jEdit.photos = jEdit.photos.filter((p) => p !== id); refreshEditorPhotos(); }
+  // 保存時に呼ぶ：外した写真に削除記録をつけ、新しい写真の削除記録は消す
+  function commitEditorPhotos(prev) {
+    jEdit.saved = true;
+    const now = new Set(jEdit.photos);
+    (prev || []).forEach((id) => { if (!now.has(id)) tombPhoto(id); });
+    jEdit.photos.forEach((id) => { delete state.deleted['photo:' + id]; });
+    return [...jEdit.photos];
+  }
+
+  // GitHub（非公開データリポジトリ）との写真の同期
+  const PHOTO_SYNC_KEY = 'lifeplan.photoSync';
+  function loadPs() { try { return { repo: '', private: null, gone: [], lastError: '', lastAt: '', ...JSON.parse(localStorage.getItem(PHOTO_SYNC_KEY) || '{}') }; } catch (e) { return { repo: '', private: null, gone: [], lastError: '', lastAt: '' }; } }
+  const ps = loadPs();
+  function savePs() { ps.gone = ps.gone.slice(-500); try { localStorage.setItem(PHOTO_SYNC_KEY, JSON.stringify(ps)); } catch (e) { /* noop */ } }
+  function photoPath(id) { const p = sync.path.split('/'); p.pop(); return (p.length ? p.join('/') + '/' : '') + 'photos/' + id + '.jpg'; }
+  async function photoRepoIsPrivate() {
+    const key = `${sync.owner}/${sync.repo}`;
+    if (ps.repo === key && ps.private != null) return ps.private;
+    const res = await gh(ghUrl(''));
+    if (!res.ok) throw await ghError(res);
+    const j = await res.json();
+    ps.repo = key; ps.private = j.private === true; savePs();
+    return ps.private;
+  }
+  async function ghGetBinary(path) {
+    const url = contentsUrl(path) + '?ref=' + encodeURIComponent(sync.branch);
+    const res = await gh(url);
+    if (res.status === 404) return null;
+    if (!res.ok) throw await ghError(res);
+    const j = await res.json();
+    if (j.encoding === 'base64' && j.content) return b64Bytes(j.content);
+    const r2 = await gh(url, {}, 'application/vnd.github.raw+json');
+    if (!r2.ok) throw await ghError(r2);
+    return new Uint8Array(await r2.arrayBuffer());
+  }
+  async function ghPutBinary(path, bytes, message) {
+    const res = await gh(contentsUrl(path), { method: 'PUT', body: JSON.stringify({ message, content: bytesB64(bytes), branch: sync.branch }) });
+    if (res.status === 422) return; // すでにある（他の端末が保存済み）
+    if (!res.ok) throw await ghError(res);
+  }
+  async function ghDeleteFile(path, message) {
+    const res = await gh(contentsUrl(path) + '?ref=' + encodeURIComponent(sync.branch));
+    if (res.status === 404) return;
+    if (!res.ok) throw await ghError(res);
+    const j = await res.json();
+    const d = await gh(contentsUrl(path), { method: 'DELETE', body: JSON.stringify({ message, sha: j.sha, branch: sync.branch }) });
+    if (!d.ok && d.status !== 404) throw await ghError(d);
+  }
+  // 使われなくなった写真（削除記録あり・猶予後）を端末から消す
+  async function photoGc() {
+    try {
+      const refs = referencedPhotos(); const t = Date.now();
+      for (const r of await photoAll()) {
+        const del = state.deleted['photo:' + r.id];
+        if (del && !refs.has(r.id) && t - new Date(del).getTime() >= PHOTO_GRACE) { await photoDel(r.id); forgetPhotoUrl(r.id); }
+      }
+    } catch (e) { /* noop */ }
+  }
+  let photoSyncing = null; let photoTimer = null;
+  function photoSyncSoon(ms = 1500) { if (!sync.connected || !sync.token) return; clearTimeout(photoTimer); photoTimer = setTimeout(() => { syncPhotos(); }, ms); }
+  async function syncPhotos() {
+    if (photoSyncing) return photoSyncing;
+    photoSyncing = (async () => {
+      const r = { up: 0, down: 0, del: 0, error: '' };
+      if (!sync.connected || !sync.token || !navigator.onLine) return r;
+      try {
+        const refs = referencedPhotos(); const t = Date.now();
+        const local = new Map((await photoAll()).map((x) => [x.id, x]));
+        // 1) 削除記録のある写真を消す（猶予後）
+        for (const [k, at] of Object.entries(state.deleted)) {
+          if (!k.startsWith('photo:')) continue;
+          const id = k.slice(6);
+          if (refs.has(id) || t - new Date(at).getTime() < PHOTO_GRACE || !PHOTO_ID_RE.test(id)) continue;
+          if (local.has(id)) { await photoDel(id); forgetPhotoUrl(id); local.delete(id); }
+          if (!ps.gone.includes(id)) { await ghDeleteFile(photoPath(id), 'ライフプラン：写真を削除'); ps.gone.push(id); savePs(); r.del++; }
+        }
+        // 2) まだ送っていない写真を送る（非公開リポジトリのときだけ）
+        const up = [...local.values()].filter((x) => !x.synced && refs.has(x.id));
+        if (up.length) {
+          if (!(await photoRepoIsPrivate())) r.error = `${sync.owner}/${sync.repo} は公開リポジトリのため、写真は GitHub に保存しません（この端末にだけ保存）`;
+          else for (const x of up) { await ghPutBinary(photoPath(x.id), new Uint8Array(x.full), `ライフプラン：写真 ${hhmm(nowIso())}`); x.synced = true; await photoPut(x); r.up++; }
+        }
+        // 3) この端末に無い写真を読み込む
+        for (const id of refs) {
+          if (local.has(id) || state.deleted['photo:' + id]) continue;
+          const bytes = await ghGetBinary(photoPath(id));
+          if (!bytes) continue;
+          await photoPut(await recordFromBytes(id, bytes)); r.down++;
+        }
+        if (r.down) hydratePhotos();
+      } catch (e) { r.error = e.message || String(e); }
+      ps.lastError = r.error; ps.lastAt = nowIso(); savePs();
+      return r;
+    })();
+    try { return await photoSyncing; } finally { photoSyncing = null; }
   }
 
   // ───────────────────────── ジャーナル：Obsidian（.md / .txt）から取り込み ─────────────────────────
@@ -2540,7 +2984,7 @@
     addLogRow: () => { const box = $('#logRows'); box.insertAdjacentHTML('afterbegin', logRow({ id: uid(), date: todayStr(), memo: '' })); const m = $('[name=logMemo]', box); if (m) m.focus(); },
     removeRow: (d, el) => el.closest('.log-row').remove(),
     editJournal: (d) => openJournalEditor(d.id),
-    deleteJournal: (d) => { const snap = snapshot(); state.journal = state.journal.filter((e) => e.id !== d.id); markDeleted(d.id); save(); closeModal(); rerender(); undoable('削除しました', snap); },
+    deleteJournal: (d) => { const snap = snapshot(); const j = state.journal.find((e) => e.id === d.id); if (j) j.photos.forEach(tombPhoto); state.journal = state.journal.filter((e) => e.id !== d.id); markDeleted(d.id); save(); closeModal(); rerender(); undoable('削除しました', snap); if (j && j.photos.length) setTimeout(() => photoGc(), PHOTO_GRACE + 1000); },
     coachDays: (d) => { ui.coachDays = Number(d.v); ui.coachText = coachText(ui.coachDays); rerender(); },
     coachRefresh: () => { ui.coachText = coachText(ui.coachDays); rerender(); toast('最新の内容に更新しました'); },
     coachCopy: async () => { toast((await copyText(ui.coachText)) ? 'コピーしました。AIアシスタントに貼り付けてください' : 'コピーできませんでした。テキストを長押しして選択してください'); },
@@ -2585,6 +3029,12 @@
     openDrawer: () => openDrawer(),
     closeDrawer: () => closeDrawer(),
     habitToggle: (d) => toggleHabitDay(d.id, d.date),
+    habitMark: (d) => markHabitDay(d.id, d.mark, d.date),
+    habitCycle: (d) => cycleHabitDay(d.id, d.date),
+    forceUpdate: () => { closeDrawer(); forceUpdate(); },
+    toggleJDay: (d, el) => toggleJournalDay(d.date, el),
+    viewPhoto: (d) => viewPhoto(d.photoId, d.entry),
+    removeEditorPhoto: (d) => removeEditorPhoto(d.photoId),
     habitMonth: (d) => {
       const h = getHabit(d.id); if (!h) return;
       const cur = todayStr().slice(0, 7); const base = ui.habitMonth[h.id] || cur;
@@ -2686,6 +3136,7 @@
         save(); toast('カテゴリ名を変更しました'); break;
       }
       case 'journalPhoto': if (el.files && el.files.length) startPhotoQueue(el.files); break;
+      case 'journalEntryPhoto': if (el.files && el.files.length) { const fs = [...el.files]; el.value = ''; addEditorPhotos(fs); } break;
       case 'obsidianFiles': if (el.files && el.files.length) importObsidianFiles(el.files); break;
       case 'aiShare': ai.share = el.checked; saveAi(); toast(ai.share ? 'タスクとジャーナルの要約を共有します' : 'データを共有せずに相談します'); rerender(); break;
       case 'syncAuto': sync.auto = el.checked; saveSync(); if (sync.auto) syncNow(); setSyncState(syncState); toast(sync.auto ? '自動同期をオンにしました' : '自動同期をオフにしました'); break;
@@ -2696,7 +3147,7 @@
     const el = e.target.closest('[data-input]');
     if (!el) return;
     if (el.dataset.input === 'search') { ui.searchQuery = el.value; $('#searchResults').innerHTML = searchResults(el.value); }
-    if (el.dataset.input === 'journalSearch') { ui.journalQuery = el.value; $('#journalList').innerHTML = journalList(el.value); }
+    if (el.dataset.input === 'journalSearch') { ui.journalQuery = el.value; const jl = $('#journalList'); jl.innerHTML = journalList(el.value); hydratePhotos(jl); }
     if (el.dataset.input === 'aiDraft') { aiUi.draft = el.value; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 160) + 'px'; }
     if (el.dataset.input === 'linkFilter') { const q = el.value.trim().toLowerCase(); $$('.link-opt', modalBox).forEach((o) => { o.hidden = !!q && !o.dataset.title.includes(q); }); }
   });
@@ -2820,9 +3271,12 @@
 
   applyTheme();
   render(false);
+  afterUpdate();
+  $$('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
+  setTimeout(() => photoGc(), 5000);
   setSyncState(syncState);
   if (sync.connected && sync.auto) syncNow();
 
   // テスト・デバッグ用（読み取りのみ）
-  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, pomu: (h, today) => { const i = pomuInfo(normHabit(h), today); return { key: i.key, name: i.name, route: i.route, lv: i.lv, total: i.total, M: i.M, streak: i.streak, best: i.best, hints: i.hints }; }, pomuChangeMsg, syncNow: () => syncNow() };
+  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, pomu: (h, today) => { const i = pomuInfo(normHabit(h), today); return { key: i.key, name: i.name, route: i.route, lv: i.lv, total: i.total, M: i.M, streak: i.streak, best: i.best, hints: i.hints }; }, pomuChangeMsg, syncNow: () => syncNow(), topPomu: () => { const p = topPomu(); return { key: p.key, lv: p.lv, id: p.h ? p.h.id : '' }; }, photoIds: async () => (await photoAll()).map((r) => r.id).sort(), photoInfo: async (id) => { const r = await photoGet(id); return r ? { id: r.id, bytes: r.full.byteLength, synced: !!r.synced } : null; }, syncPhotos: () => syncPhotos(), photoGc: () => photoGc(), photoDims: async (id) => { const r = await photoGet(id); if (!r) return null; const b = await createImageBitmap(new Blob([r.full], { type: 'image/jpeg' })); return [b.width, b.height, r.full.byteLength]; } };
 })();

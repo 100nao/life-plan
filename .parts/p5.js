@@ -396,6 +396,7 @@
         }
         await pullCoachInbox();
         sync.lastSyncAt = nowIso(); sync.lastError = ''; saveSync(); setSyncState('ok');
+        photoSyncSoon(400);
       } catch (e) {
         sync.lastError = e.message || String(e); saveSync();
         setSyncState(e.network || !navigator.onLine ? 'offline' : 'error');
@@ -764,7 +765,7 @@
       const t = $('.photo-loading .photo-thumb'); if (t) t.outerHTML = `<img class="photo-thumb" src="${img.thumb}" alt="選んだ写真">`;
       const reply = await callGemini([{ role: 'user', parts: [{ inline_data: { mime_type: 'image/jpeg', data: img.full.split(',')[1] } }, { text: PHOTO_PROMPT.replace('TODAY', todayStr()) }] }], { json: true, temperature: 0.1, maxTokens: 4096 });
       if (backdrop.hidden) return; // 途中で閉じた
-      photo.cur = { thumb, name: file.name, ...parsePhotoResult(reply) };
+      photo.cur = { thumb, name: file.name, file, ...parsePhotoResult(reply) };
       photo.busy = false;
       openPhotoReview();
     } catch (e) {
@@ -785,7 +786,8 @@
     openModal(`${modalHead('読み取り結果を確認' + photoStepLabel())}
       <form data-form="photoJournal" class="photo-review">
         <img class="photo-thumb" src="${c.thumb}" alt="読み取った写真" data-action="photoZoom">
-        <p class="muted small">写真そのものは保存されません（文字だけ保存）。内容を確認・修正してから保存してください。</p>
+        <p class="muted small">内容を確認・修正してから保存してください。写真は、下のチェックを入れたときだけジャーナルに添付します。</p>
+        <label class="check-line"><input type="checkbox" name="keepPhoto" value="1"> <span>この写真もジャーナルに添付する</span></label>
         <label class="field"><span class="field-label">日付${c.date ? '<small class="ok-text">（ページの日付を検出）</small>' : ''}</span><input type="date" name="date" value="${esc(c.date || todayStr())}" required></label>
         <div class="field"><span class="field-label">気分（任意）</span><div class="mood-pick">${[1, 2, 3, 4, 5].map((n) => `<label title="${MOOD_LABEL[n]}"><input type="radio" name="mood" value="${n}"><span>${MOODS[n]}<small>${n}</small></span></label>`).join('')}</div></div>
         <label class="field"><span class="field-label">書き起こし</span><textarea name="text" rows="10">${esc(c.text)}</textarea></label>
@@ -815,12 +817,254 @@
     if (!text) { toast('内容が空です'); return; }
     const date = isDateStr(String(fd.get('date'))) ? String(fd.get('date')) : todayStr();
     const dup = state.journal.some((e) => e.date === date && e.text.trim() === text);
-    if (!dup) state.journal.push(normJournal({ date, text, mood: Number(fd.get('mood')) || 0, source: 'photo' }));
+    const entry = dup ? null : normJournal({ date, text, mood: Number(fd.get('mood')) || 0, source: 'photo' });
+    if (entry) state.journal.push(entry);
+    const file = photo.cur && photo.cur.file;
+    if (entry && file && fd.get('keepPhoto')) {
+      makePhotoRecord(file).then((rec) => photoPut(rec).then(() => {
+        const e = state.journal.find((x) => x.id === entry.id); if (!e) { photoDel(rec.id).catch(() => {}); return; }
+        e.photos = [...e.photos, rec.id]; e.updatedAt = nowIso(); save(); rerenderSoft();
+      })).catch((err) => toast('⚠️ 写真を添付できませんでした：' + (err.message || err)));
+    }
     const t = nowIso(); let nt = 0;
     fd.getAll('task').map(String).forEach((title) => { if (!state.items.some((i) => norm(i.title) === norm(title))) { state.items.unshift(normItem({ title: trunc(title, 120), list: 'inbox', source: 'photo', createdAt: t, updatedAt: t })); nt++; } });
     save(); rerender();
     toast(dup ? '同じ内容のジャーナルが既にあるため、保存しませんでした' : `ジャーナルを保存しました${nt ? `（未整理に ${nt}件 追加）` : ''}`);
     if (photo.queue.length) nextPhoto(); else { photo.cur = null; closeModal(); }
+  }
+
+  // ───────────────────────── ジャーナルの写真（v1.3.1） ─────────────────────────
+  // 画像本体はこの端末の IndexedDB（lifeplan-photos）に保存し、state のジャーナルには写真の id だけを持たせる。
+  // GitHub 同期中は、非公開のデータリポジトリの data/photos/<id>.jpg に1枚ずつ保存（公開リポジトリには保存しない）。
+  // 他の端末では、id はあるのに本体が無い写真を GitHub から読み込む。削除は「photo:<id>」の削除記録で全端末に伝える。
+  const PHOTO_MAX = 1280; const PHOTO_Q = 0.7; const PHOTO_THUMB = 360; const PHOTO_LIMIT = 12;
+  const PHOTO_GRACE = 120000; // 削除してから実際に消すまでの猶予（「元に戻す」のため）
+  let photoDbP = null;
+  function photoDb() {
+    if (photoDbP) return photoDbP;
+    photoDbP = new Promise((resolve, reject) => {
+      if (!window.indexedDB) { reject(new Error('この端末では写真を保存できません')); return; }
+      const rq = indexedDB.open('lifeplan-photos', 1);
+      rq.onupgradeneeded = () => { const db = rq.result; if (!db.objectStoreNames.contains('photos')) db.createObjectStore('photos', { keyPath: 'id' }); };
+      rq.onsuccess = () => resolve(rq.result);
+      rq.onerror = () => reject(rq.error || new Error('写真の保存領域を開けませんでした'));
+    });
+    photoDbP.catch(() => { photoDbP = null; });
+    return photoDbP;
+  }
+  async function idbDo(mode, fn) {
+    const db = await photoDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('photos', mode); const rq = fn(tx.objectStore('photos')); let val;
+      if (rq) rq.onsuccess = () => { val = rq.result; };
+      tx.oncomplete = () => resolve(val);
+      tx.onerror = () => reject(tx.error || new Error('写真を保存できませんでした'));
+      tx.onabort = () => reject(tx.error || new Error('写真を保存できませんでした（容量不足の可能性）'));
+    });
+  }
+  const photoGet = (id) => idbDo('readonly', (st) => st.get(id));
+  const photoPut = (rec) => idbDo('readwrite', (st) => st.put(rec));
+  const photoDel = (id) => idbDo('readwrite', (st) => st.delete(id));
+  const photoAll = () => idbDo('readonly', (st) => st.getAll());
+  function dataUrlBytes(u) { const b = atob(u.split(',')[1]); const a = new Uint8Array(b.length); for (let k = 0; k < b.length; k++) a[k] = b.charCodeAt(k); return a; }
+  function bytesB64(bytes) { let bin = ''; for (let k = 0; k < bytes.length; k += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(k, k + 0x8000)); return btoa(bin); }
+  function b64Bytes(b64) { const bin = atob(String(b64).replace(/\s/g, '')); const a = new Uint8Array(bin.length); for (let k = 0; k < bin.length; k++) a[k] = bin.charCodeAt(k); return a; }
+  // 長い辺 1280px・JPEG 品質 0.7 に縮小（手書き読み取りと同じ loadImageFile / drawScaled を使う）
+  async function makePhotoRecord(file, id = uid()) {
+    const { img, done } = await loadImageFile(file);
+    try {
+      return { id, full: dataUrlBytes(drawScaled(img, PHOTO_MAX, PHOTO_Q)).buffer, thumb: dataUrlBytes(drawScaled(img, PHOTO_THUMB, 0.72)).buffer, createdAt: nowIso(), synced: false };
+    } finally { done(); }
+  }
+  async function recordFromBytes(id, bytes) {
+    const { img, done } = await loadImageFile(new Blob([bytes], { type: 'image/jpeg' }));
+    try { return { id, full: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), thumb: dataUrlBytes(drawScaled(img, PHOTO_THUMB, 0.72)).buffer, createdAt: nowIso(), synced: true }; } finally { done(); }
+  }
+  const photoUrls = new Map(); // id → { thumb, full }（blob: URL）
+  function photoUrl(rec, kind) {
+    let c = photoUrls.get(rec.id); if (!c) { c = {}; photoUrls.set(rec.id, c); }
+    if (!c[kind]) c[kind] = URL.createObjectURL(new Blob([rec[kind]], { type: 'image/jpeg' }));
+    return c[kind];
+  }
+  function forgetPhotoUrl(id) { const c = photoUrls.get(id); if (c) { Object.values(c).forEach((u) => URL.revokeObjectURL(u)); photoUrls.delete(id); } }
+  const cachedThumb = (id) => (photoUrls.get(id) || {}).thumb || '';
+  // サムネイルの並び（editable：編集画面の「外す」ボタン付き）
+  function photoThumbs(ids, entryId, editable) {
+    if (!ids || !ids.length) return '';
+    return `<div class="j-photos">${ids.map((id) => `<div class="j-photo${cachedThumb(id) ? '' : ' loading'}"><button type="button" class="j-photo-view" data-action="viewPhoto" data-photo-id="${id}" data-entry="${editable ? '' : entryId || ''}" aria-label="写真を大きく表示"><img data-photo="${id}" alt="" ${cachedThumb(id) ? `src="${cachedThumb(id)}"` : ''}></button>${editable ? `<button type="button" class="j-photo-del" data-action="removeEditorPhoto" data-photo-id="${id}" aria-label="この写真を外す">×</button>` : ''}</div>`).join('')}</div>`;
+  }
+  async function hydratePhotos(root = document) {
+    const imgs = $$('img[data-photo]:not([src])', root);
+    if (!imgs.length) return;
+    let missing = 0;
+    for (const im of imgs) {
+      const box = im.closest('.j-photo');
+      try {
+        const rec = await photoGet(im.dataset.photo);
+        if (rec) { im.src = photoUrl(rec, 'thumb'); if (box) box.classList.remove('loading', 'missing'); } else { missing++; if (box) { box.classList.remove('loading'); box.classList.add('missing'); } }
+      } catch (e) { if (box) { box.classList.remove('loading'); box.classList.add('missing'); } }
+    }
+    if (missing && sync.connected && sync.token && navigator.onLine) photoSyncSoon(300);
+  }
+  const referencedPhotos = () => new Set(state.journal.flatMap((e) => e.photos || []));
+  function tombPhoto(id) { state.deleted['photo:' + id] = nowIso(); }
+
+  // 拡大表示
+  async function viewPhoto(id, entryId) {
+    let rec = null; try { rec = await photoGet(id); } catch (e) { /* noop */ }
+    if (!rec) {
+      if (sync.connected && sync.token) { toast('写真を GitHub から読み込んでいます…'); await syncPhotos(); try { rec = await photoGet(id); } catch (e) { /* noop */ } }
+      if (!rec) { toast(sync.connected ? '写真を読み込めませんでした。少し待ってからもう一度お試しください' : 'この端末には写真がありません（GitHub 同期をすると他の端末の写真も見られます）'); return; }
+    }
+    const old = $('#photoViewer'); if (old) old.remove();
+    const el = document.createElement('div');
+    el.id = 'photoViewer'; el.className = 'photo-viewer'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', '写真');
+    el.innerHTML = `<img class="pv-img" src="${photoUrl(rec, 'full')}" alt="ジャーナルの写真"><div class="pv-bar"><button type="button" class="btn soft small" data-pv="close">閉じる</button>${entryId ? '<button type="button" class="btn danger small" data-pv="del">🗑 この写真を削除</button>' : ''}</div>`;
+    const close = () => { el.classList.add('out'); setTimeout(() => el.remove(), 200); document.removeEventListener('keydown', onKey); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+    el.addEventListener('click', (e) => { const b = e.target.closest('[data-pv]'); close(); if (b && b.dataset.pv === 'del') deleteEntryPhoto(entryId, id); });
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(el);
+  }
+  async function deleteEntryPhoto(entryId, id) {
+    const e = state.journal.find((x) => x.id === entryId);
+    if (!e || !e.photos.includes(id)) return;
+    if (!(await confirmDialog('この写真をジャーナルから削除しますか？（GitHub 同期中は他の端末からも消えます）', '削除する', true))) return;
+    const snap = snapshot();
+    e.photos = e.photos.filter((p) => p !== id); e.updatedAt = nowIso(); tombPhoto(id);
+    save(); rerender(); undoable('写真を削除しました', snap);
+    setTimeout(() => photoGc(), PHOTO_GRACE + 1000);
+  }
+
+  // 編集画面の写真（保存するまでは確定しない）
+  const jEdit = { photos: [], added: [], saved: false, busy: 0 };
+  function startJournalEdit(e) { jEdit.photos = e ? [...e.photos] : []; jEdit.added = []; jEdit.saved = false; jEdit.busy = 0; }
+  function endJournalEdit() {
+    if (!jEdit.saved) jEdit.added.forEach((id) => { photoDel(id).catch(() => {}); forgetPhotoUrl(id); });
+    jEdit.added = [];
+  }
+  function refreshEditorPhotos() {
+    const box = $('#jPhotoBox', modalBox); if (!box) return;
+    box.innerHTML = photoThumbs(jEdit.photos, '', true) + (jEdit.busy ? `<p class="muted small"><span class="dots"><i></i><i></i><i></i></span> 写真を縮小しています…（${jEdit.busy}枚）</p>` : '');
+    const c = $('#jPhotoCount', modalBox); if (c) c.textContent = jEdit.photos.length ? `${jEdit.photos.length}枚` : '';
+    hydratePhotos(box);
+  }
+  async function addEditorPhotos(files) {
+    files = [...files].filter((f) => /^image\//.test(f.type) || /\.(heic|heif|jpe?g|png|webp)$/i.test(f.name));
+    if (!files.length) { toast('画像ファイルを選んでください'); return; }
+    const room = PHOTO_LIMIT - jEdit.photos.length;
+    if (room <= 0) { toast(`写真は1件につき${PHOTO_LIMIT}枚までです`); return; }
+    if (files.length > room) { toast(`写真は1件につき${PHOTO_LIMIT}枚までです（${room}枚だけ追加します）`); files = files.slice(0, room); }
+    jEdit.busy += files.length; refreshEditorPhotos();
+    let failed = '';
+    for (const f of files) {
+      try {
+        const rec = await makePhotoRecord(f);
+        await photoPut(rec);
+        if (backdrop.hidden || !$('#jPhotoBox', modalBox)) { photoDel(rec.id).catch(() => {}); continue; } // 途中で閉じた
+        photoUrl(rec, 'thumb');
+        jEdit.photos.push(rec.id); jEdit.added.push(rec.id);
+      } catch (e) { failed = e.message || String(e); }
+      jEdit.busy--; refreshEditorPhotos();
+    }
+    if (failed) toast('⚠️ ' + failed);
+  }
+  function removeEditorPhoto(id) { jEdit.photos = jEdit.photos.filter((p) => p !== id); refreshEditorPhotos(); }
+  // 保存時に呼ぶ：外した写真に削除記録をつけ、新しい写真の削除記録は消す
+  function commitEditorPhotos(prev) {
+    jEdit.saved = true;
+    const now = new Set(jEdit.photos);
+    (prev || []).forEach((id) => { if (!now.has(id)) tombPhoto(id); });
+    jEdit.photos.forEach((id) => { delete state.deleted['photo:' + id]; });
+    return [...jEdit.photos];
+  }
+
+  // GitHub（非公開データリポジトリ）との写真の同期
+  const PHOTO_SYNC_KEY = 'lifeplan.photoSync';
+  function loadPs() { try { return { repo: '', private: null, gone: [], lastError: '', lastAt: '', ...JSON.parse(localStorage.getItem(PHOTO_SYNC_KEY) || '{}') }; } catch (e) { return { repo: '', private: null, gone: [], lastError: '', lastAt: '' }; } }
+  const ps = loadPs();
+  function savePs() { ps.gone = ps.gone.slice(-500); try { localStorage.setItem(PHOTO_SYNC_KEY, JSON.stringify(ps)); } catch (e) { /* noop */ } }
+  function photoPath(id) { const p = sync.path.split('/'); p.pop(); return (p.length ? p.join('/') + '/' : '') + 'photos/' + id + '.jpg'; }
+  async function photoRepoIsPrivate() {
+    const key = `${sync.owner}/${sync.repo}`;
+    if (ps.repo === key && ps.private != null) return ps.private;
+    const res = await gh(ghUrl(''));
+    if (!res.ok) throw await ghError(res);
+    const j = await res.json();
+    ps.repo = key; ps.private = j.private === true; savePs();
+    return ps.private;
+  }
+  async function ghGetBinary(path) {
+    const url = contentsUrl(path) + '?ref=' + encodeURIComponent(sync.branch);
+    const res = await gh(url);
+    if (res.status === 404) return null;
+    if (!res.ok) throw await ghError(res);
+    const j = await res.json();
+    if (j.encoding === 'base64' && j.content) return b64Bytes(j.content);
+    const r2 = await gh(url, {}, 'application/vnd.github.raw+json');
+    if (!r2.ok) throw await ghError(r2);
+    return new Uint8Array(await r2.arrayBuffer());
+  }
+  async function ghPutBinary(path, bytes, message) {
+    const res = await gh(contentsUrl(path), { method: 'PUT', body: JSON.stringify({ message, content: bytesB64(bytes), branch: sync.branch }) });
+    if (res.status === 422) return; // すでにある（他の端末が保存済み）
+    if (!res.ok) throw await ghError(res);
+  }
+  async function ghDeleteFile(path, message) {
+    const res = await gh(contentsUrl(path) + '?ref=' + encodeURIComponent(sync.branch));
+    if (res.status === 404) return;
+    if (!res.ok) throw await ghError(res);
+    const j = await res.json();
+    const d = await gh(contentsUrl(path), { method: 'DELETE', body: JSON.stringify({ message, sha: j.sha, branch: sync.branch }) });
+    if (!d.ok && d.status !== 404) throw await ghError(d);
+  }
+  // 使われなくなった写真（削除記録あり・猶予後）を端末から消す
+  async function photoGc() {
+    try {
+      const refs = referencedPhotos(); const t = Date.now();
+      for (const r of await photoAll()) {
+        const del = state.deleted['photo:' + r.id];
+        if (del && !refs.has(r.id) && t - new Date(del).getTime() >= PHOTO_GRACE) { await photoDel(r.id); forgetPhotoUrl(r.id); }
+      }
+    } catch (e) { /* noop */ }
+  }
+  let photoSyncing = null; let photoTimer = null;
+  function photoSyncSoon(ms = 1500) { if (!sync.connected || !sync.token) return; clearTimeout(photoTimer); photoTimer = setTimeout(() => { syncPhotos(); }, ms); }
+  async function syncPhotos() {
+    if (photoSyncing) return photoSyncing;
+    photoSyncing = (async () => {
+      const r = { up: 0, down: 0, del: 0, error: '' };
+      if (!sync.connected || !sync.token || !navigator.onLine) return r;
+      try {
+        const refs = referencedPhotos(); const t = Date.now();
+        const local = new Map((await photoAll()).map((x) => [x.id, x]));
+        // 1) 削除記録のある写真を消す（猶予後）
+        for (const [k, at] of Object.entries(state.deleted)) {
+          if (!k.startsWith('photo:')) continue;
+          const id = k.slice(6);
+          if (refs.has(id) || t - new Date(at).getTime() < PHOTO_GRACE || !PHOTO_ID_RE.test(id)) continue;
+          if (local.has(id)) { await photoDel(id); forgetPhotoUrl(id); local.delete(id); }
+          if (!ps.gone.includes(id)) { await ghDeleteFile(photoPath(id), 'ライフプラン：写真を削除'); ps.gone.push(id); savePs(); r.del++; }
+        }
+        // 2) まだ送っていない写真を送る（非公開リポジトリのときだけ）
+        const up = [...local.values()].filter((x) => !x.synced && refs.has(x.id));
+        if (up.length) {
+          if (!(await photoRepoIsPrivate())) r.error = `${sync.owner}/${sync.repo} は公開リポジトリのため、写真は GitHub に保存しません（この端末にだけ保存）`;
+          else for (const x of up) { await ghPutBinary(photoPath(x.id), new Uint8Array(x.full), `ライフプラン：写真 ${hhmm(nowIso())}`); x.synced = true; await photoPut(x); r.up++; }
+        }
+        // 3) この端末に無い写真を読み込む
+        for (const id of refs) {
+          if (local.has(id) || state.deleted['photo:' + id]) continue;
+          const bytes = await ghGetBinary(photoPath(id));
+          if (!bytes) continue;
+          await photoPut(await recordFromBytes(id, bytes)); r.down++;
+        }
+        if (r.down) hydratePhotos();
+      } catch (e) { r.error = e.message || String(e); }
+      ps.lastError = r.error; ps.lastAt = nowIso(); savePs();
+      return r;
+    })();
+    try { return await photoSyncing; } finally { photoSyncing = null; }
   }
 
   // ───────────────────────── ジャーナル：Obsidian（.md / .txt）から取り込み ─────────────────────────

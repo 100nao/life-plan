@@ -1,7 +1,7 @@
 /* ライフプラン Service Worker — アプリ本体をキャッシュしてオフラインで動かす。
    ユーザーデータ・APIキー・AIとの会話は localStorage にのみ保存され、ここでは一切扱わない。
    アプリを更新したら CACHE_VERSION を上げること。 */
-const CACHE_VERSION = 'lifeplan-v1.3.0';
+const CACHE_VERSION = 'lifeplan-v1.3.1';
 const ASSETS = [
   './',
   './index.html',
@@ -22,7 +22,8 @@ const ASSETS = [
   './images/bg-mist-thumb.jpg',
   './images/bg-sunrise-thumb.jpg',
   './images/bg-forest-thumb.jpg',
-  './images/bg-ocean-thumb.jpg'
+  './images/bg-ocean-thumb.jpg',
+  './images/monster/stage-1-256.webp'
 ];
 
 self.addEventListener('install', (event) => {

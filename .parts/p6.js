@@ -79,7 +79,7 @@
     addLogRow: () => { const box = $('#logRows'); box.insertAdjacentHTML('afterbegin', logRow({ id: uid(), date: todayStr(), memo: '' })); const m = $('[name=logMemo]', box); if (m) m.focus(); },
     removeRow: (d, el) => el.closest('.log-row').remove(),
     editJournal: (d) => openJournalEditor(d.id),
-    deleteJournal: (d) => { const snap = snapshot(); state.journal = state.journal.filter((e) => e.id !== d.id); markDeleted(d.id); save(); closeModal(); rerender(); undoable('削除しました', snap); },
+    deleteJournal: (d) => { const snap = snapshot(); const j = state.journal.find((e) => e.id === d.id); if (j) j.photos.forEach(tombPhoto); state.journal = state.journal.filter((e) => e.id !== d.id); markDeleted(d.id); save(); closeModal(); rerender(); undoable('削除しました', snap); if (j && j.photos.length) setTimeout(() => photoGc(), PHOTO_GRACE + 1000); },
     coachDays: (d) => { ui.coachDays = Number(d.v); ui.coachText = coachText(ui.coachDays); rerender(); },
     coachRefresh: () => { ui.coachText = coachText(ui.coachDays); rerender(); toast('最新の内容に更新しました'); },
     coachCopy: async () => { toast((await copyText(ui.coachText)) ? 'コピーしました。AIアシスタントに貼り付けてください' : 'コピーできませんでした。テキストを長押しして選択してください'); },
@@ -124,6 +124,12 @@
     openDrawer: () => openDrawer(),
     closeDrawer: () => closeDrawer(),
     habitToggle: (d) => toggleHabitDay(d.id, d.date),
+    habitMark: (d) => markHabitDay(d.id, d.mark, d.date),
+    habitCycle: (d) => cycleHabitDay(d.id, d.date),
+    forceUpdate: () => { closeDrawer(); forceUpdate(); },
+    toggleJDay: (d, el) => toggleJournalDay(d.date, el),
+    viewPhoto: (d) => viewPhoto(d.photoId, d.entry),
+    removeEditorPhoto: (d) => removeEditorPhoto(d.photoId),
     habitMonth: (d) => {
       const h = getHabit(d.id); if (!h) return;
       const cur = todayStr().slice(0, 7); const base = ui.habitMonth[h.id] || cur;
@@ -225,6 +231,7 @@
         save(); toast('カテゴリ名を変更しました'); break;
       }
       case 'journalPhoto': if (el.files && el.files.length) startPhotoQueue(el.files); break;
+      case 'journalEntryPhoto': if (el.files && el.files.length) { const fs = [...el.files]; el.value = ''; addEditorPhotos(fs); } break;
       case 'obsidianFiles': if (el.files && el.files.length) importObsidianFiles(el.files); break;
       case 'aiShare': ai.share = el.checked; saveAi(); toast(ai.share ? 'タスクとジャーナルの要約を共有します' : 'データを共有せずに相談します'); rerender(); break;
       case 'syncAuto': sync.auto = el.checked; saveSync(); if (sync.auto) syncNow(); setSyncState(syncState); toast(sync.auto ? '自動同期をオンにしました' : '自動同期をオフにしました'); break;
@@ -235,7 +242,7 @@
     const el = e.target.closest('[data-input]');
     if (!el) return;
     if (el.dataset.input === 'search') { ui.searchQuery = el.value; $('#searchResults').innerHTML = searchResults(el.value); }
-    if (el.dataset.input === 'journalSearch') { ui.journalQuery = el.value; $('#journalList').innerHTML = journalList(el.value); }
+    if (el.dataset.input === 'journalSearch') { ui.journalQuery = el.value; const jl = $('#journalList'); jl.innerHTML = journalList(el.value); hydratePhotos(jl); }
     if (el.dataset.input === 'aiDraft') { aiUi.draft = el.value; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 160) + 'px'; }
     if (el.dataset.input === 'linkFilter') { const q = el.value.trim().toLowerCase(); $$('.link-opt', modalBox).forEach((o) => { o.hidden = !!q && !o.dataset.title.includes(q); }); }
   });
@@ -359,9 +366,12 @@
 
   applyTheme();
   render(false);
+  afterUpdate();
+  $$('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
+  setTimeout(() => photoGc(), 5000);
   setSyncState(syncState);
   if (sync.connected && sync.auto) syncNow();
 
   // テスト・デバッグ用（読み取りのみ）
-  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, pomu: (h, today) => { const i = pomuInfo(normHabit(h), today); return { key: i.key, name: i.name, route: i.route, lv: i.lv, total: i.total, M: i.M, streak: i.streak, best: i.best, hints: i.hints }; }, pomuChangeMsg, syncNow: () => syncNow() };
+  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, pomu: (h, today) => { const i = pomuInfo(normHabit(h), today); return { key: i.key, name: i.name, route: i.route, lv: i.lv, total: i.total, M: i.M, streak: i.streak, best: i.best, hints: i.hints }; }, pomuChangeMsg, syncNow: () => syncNow(), topPomu: () => { const p = topPomu(); return { key: p.key, lv: p.lv, id: p.h ? p.h.id : '' }; }, photoIds: async () => (await photoAll()).map((r) => r.id).sort(), photoInfo: async (id) => { const r = await photoGet(id); return r ? { id: r.id, bytes: r.full.byteLength, synced: !!r.synced } : null; }, syncPhotos: () => syncPhotos(), photoGc: () => photoGc(), photoDims: async (id) => { const r = await photoGet(id); if (!r) return null; const b = await createImageBitmap(new Blob([r.full], { type: 'image/jpeg' })); return [b.width, b.height, r.full.byteLength]; } };
 })();

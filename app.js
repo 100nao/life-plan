@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.2.1';
+  const APP_VERSION = '1.2.2';
   const DEFAULT_CATEGORIES = ['旅行', '仕事/キャリア', '健康', '家族', '趣味', '学び', 'お金', 'その他'];
   const IMPORTANCE = { high: '高', mid: '中', low: '低' };
   const IMPORTANCE_ORDER = { high: 0, mid: 1, low: 2 };
@@ -1790,10 +1790,12 @@
     if (status >= 500) return 'Gemini が混み合っているようです。少し待ってから再度お試しください。';
     return `エラーが発生しました（${status}）${err.message ? '：' + trunc(String(err.message), 80) : ''}`;
   }
+  function cleanAiKey(k) { return String(k || '').replace(/[\s\u200B-\u200D\uFEFF\u3000]+/g, ''); }
   async function callGemini(contents, opts = {}) {
-    const key = opts.key || ai.key;
+    const key = cleanAiKey(opts.key || ai.key);
     const model = opts.model || ai.model;
     if (!key) throw new Error('APIキーが設定されていません。設定の「AI連携（Gemini）」で登録してください。');
+    if (/[^\x21-\x7E]/.test(key) || /[…]/.test(key)) throw new Error('APIキーに使えない文字（「…」や全角文字など）が含まれています。Google AI Studio のコピーボタンでキーをコピーし直して貼り付けてください。');
     if (!navigator.onLine) throw new Error('オフラインです。インターネットに接続してから送信してください。');
     const body = { contents, generationConfig: { maxOutputTokens: opts.maxTokens || 4096 } };
     if (opts.json) body.generationConfig.responseMimeType = 'application/json';
@@ -1913,7 +1915,7 @@
   }
   async function aiTest() {
     const inp = $('#aiKeyInput'); const msg = $('#aiMsg'); const btn = $('#aiTestBtn');
-    const key = (inp && inp.value.trim()) || ai.key;
+    const key = cleanAiKey((inp && inp.value) || '') || ai.key;
     const sel = $('form[data-form=aiSetup] select[name=model]');
     const model = (sel && sel.value) || ai.model;
     if (!key) { msg.textContent = 'APIキーを貼り付けてください'; return; }

@@ -1,7 +1,7 @@
 /* ライフプラン Service Worker — アプリ本体をキャッシュしてオフラインで動かす。
    ユーザーデータ・APIキー・AIとの会話は localStorage にのみ保存され、ここでは一切扱わない。
    アプリを更新したら CACHE_VERSION を上げること。 */
-const CACHE_VERSION = 'lifeplan-v1.2.5';
+const CACHE_VERSION = 'lifeplan-v1.2.6';
 const ASSETS = [
   './',
   './index.html',

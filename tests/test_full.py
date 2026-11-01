@@ -396,7 +396,7 @@ with sync_playwright() as p:
     pg.click('.ai-setup a[href="#settings/ai"]'); wait_idle(pg, 500)
     card = pg.inner_text('#aiCard')
     check('設定：AI連携（Gemini）セクション', 'AI連携（Gemini）' in card and 'GitHubには送られません' in card and '無料枠' in card and pg.locator('#aiCard a[href="https://aistudio.google.com/apikey"]').count() == 1)
-    check('設定：モデル選択（既定 gemini-flash-latest）', pg.eval_on_selector('form[data-form=aiSetup] select[name=model]', 'e => e.value') == 'gemini-flash-latest' and pg.locator('form[data-form=aiSetup] option[value="gemini-3.5-flash-lite"]').count() == 1)
+    check('設定：モデル選択（既定 gemini-flash-lite-latest）', pg.eval_on_selector('form[data-form=aiSetup] select[name=model]', 'e => e.value') == 'gemini-flash-lite-latest' and pg.locator('form[data-form=aiSetup] option[value="gemini-3.5-flash-lite"]').count() == 1)
     check('設定：キーは伏せ字', pg.get_attribute('#aiKeyInput', 'type') == 'password')
     pg.click('[data-action=aiToggleKey]'); check('設定：キーの表示切替', pg.get_attribute('#aiKeyInput', 'type') == 'text'); pg.click('[data-action=aiToggleKey]')
     pg.fill('#aiKeyInput', 'AIza_WRONG')

@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.2.5';
+  const APP_VERSION = '1.2.6';
   const DEFAULT_CATEGORIES = ['旅行', '仕事/キャリア', '健康', '家族', '趣味', '学び', 'お金', 'その他'];
   const IMPORTANCE = { high: '高', mid: '中', low: '低' };
   const IMPORTANCE_ORDER = { high: 0, mid: 1, low: 2 };
@@ -1717,13 +1717,13 @@
   const AI_KEY = 'lifeplan.ai';
   const AI_HIST_KEY = 'lifeplan.aiChat';
   const AI_HIST_MAX = 50;
-  const AI_MODELS = { 'gemini-flash-latest': '最新のFlash（自動・おすすめ）', 'gemini-3.8-flash': 'gemini-3.8-flash（高性能）', 'gemini-3.6-flash': 'gemini-3.6-flash（標準）', 'gemini-3.5-flash-lite': 'gemini-3.5-flash-lite（軽量・速い）' };
-  const AI_DEFAULT_MODEL = 'gemini-flash-latest';
-  const AI_FALLBACKS = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-flash-lite-latest'];
+  const AI_MODELS = { 'gemini-flash-lite-latest': '軽量Flash（速い・おすすめ）', 'gemini-flash-latest': '最新のFlash（賢いが遅め）', 'gemini-3.8-flash': 'gemini-3.8-flash（高性能）', 'gemini-3.6-flash': 'gemini-3.6-flash（標準）', 'gemini-3.5-flash-lite': 'gemini-3.5-flash-lite（軽量・速い）' };
+  const AI_DEFAULT_MODEL = 'gemini-flash-lite-latest';
+  const AI_FALLBACKS = ['gemini-flash-lite-latest', 'gemini-3.5-flash-lite', 'gemini-flash-latest', 'gemini-3.6-flash', 'gemini-3.8-flash'];
   const AI_ENDPOINT = (model) => `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const AI_CHIPS = ['今週何から手をつける？', '停滞タスクの原因を一緒に考えて', 'このタスクをステップに分けて', 'ジャーナルを振り返って'];
   function loadAi() {
-    try { const o = JSON.parse(localStorage.getItem(AI_KEY) || '{}'); return { key: String(o.key || ''), model: AI_MODELS[o.model] ? o.model : AI_DEFAULT_MODEL, share: o.share !== false }; } catch (e) { return { key: '', model: AI_DEFAULT_MODEL, share: true }; }
+    try { const o = JSON.parse(localStorage.getItem(AI_KEY) || '{}'); return { key: String(o.key || ''), model: (o.mv === 2 && AI_MODELS[o.model]) ? o.model : AI_DEFAULT_MODEL, share: o.share !== false, mv: 2 }; } catch (e) { return { key: '', model: AI_DEFAULT_MODEL, share: true, mv: 2 }; }
   }
   let ai = loadAi();
   function saveAi() { try { localStorage.setItem(AI_KEY, JSON.stringify(ai)); } catch (e) { /* noop */ } }

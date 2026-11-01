@@ -754,3 +754,166 @@ body.drawer-open .main, body.drawer-open .topbar { transform: translateX(min(10v
   .card.item.compact .item-ico { display: none; }
   .quad h2::before { content: none !important; }
 }
+
+/* ── 習慣スタンプ・ぽむ（v1.3.0） ── */
+:root { --stamp: #ec8f86; --miss: #6fa7b0; --pomu-glow: #fde8ec; --rich: #d6a93f; --villain: #8a7bb0; }
+:root { --stamp-soft: #fdecea; }
+:root[data-theme="dark"] { --stamp-soft: #43302f; --pomu-glow: #3a2f33; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --stamp-soft: #43302f; --pomu-glow: #3a2f33; } }
+.st-o circle { fill: none; stroke: var(--stamp); stroke-width: 3.6; }
+.st-x path { stroke: var(--miss); stroke-width: 3.2; stroke-linecap: round; fill: none; }
+.count.all { background: var(--stamp-soft); color: var(--stamp); }
+
+/* 一覧・ホームの行 */
+.habit-list { display: flex; flex-direction: column; gap: 4px; }
+.habit-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.habit-row + .habit-row { border-top: 1px solid var(--border); padding-top: 10px; }
+.hr-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; }
+.hr-pomu { flex: none; width: 56px; height: 56px; border-radius: 18px; background: radial-gradient(circle at 50% 60%, var(--pomu-glow), var(--surface-2) 72%); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.hr-pomu img { width: 52px; height: 52px; object-fit: contain; }
+.hr-title { display: block; font-size: 15.5px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hr-sub { display: block; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stamp-btn {
+  flex: none; position: relative; width: 58px; height: 58px; border-radius: 50%; border: 2px dashed color-mix(in srgb, var(--stamp) 55%, var(--border)); background: var(--surface);
+  color: var(--stamp); font: inherit; font-size: 11.5px; font-weight: 800; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform .25s var(--ease-spring), background .2s;
+}
+.stamp-btn svg { position: absolute; inset: 6px; width: auto; height: auto; opacity: 0; transform: scale(1.6) rotate(-20deg); transition: opacity .2s, transform .35s var(--ease-spring); }
+.stamp-btn:active { transform: scale(.9); }
+.stamp-btn.on { border: 2px solid transparent; background: var(--stamp-soft); }
+.stamp-btn.on svg { opacity: 1; transform: none; }
+.stamp-btn.on span { color: var(--stamp); }
+.habit-invite { display: flex; align-items: center; gap: 12px; background: linear-gradient(135deg, var(--stamp-soft), var(--surface) 70%); }
+.habit-invite img, .zukan-entry img { width: 52px; height: 52px; object-fit: contain; flex: none; }
+.habit-invite b, .zukan-entry b { display: block; font-size: 15px; }
+.habit-invite .muted, .zukan-entry .muted { display: block; }
+.zukan-entry { display: flex; align-items: center; gap: 12px; }
+.ze-imgs { display: flex; flex: none; }
+.ze-imgs img { width: 40px; height: 40px; margin-right: -10px; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .12)); }
+.ze-imgs img:last-child { margin-right: 0; }
+.habit-empty { text-align: center; padding: 24px 18px; }
+.habit-empty img { width: 150px; height: 150px; object-fit: contain; animation: pomuFloat 4s ease-in-out infinite; }
+.habit-empty h3 { font-size: 17px; margin: 6px 0; }
+
+/* 詳細：タイトル・ぽむ */
+.habit-title { text-align: center; font-size: 24px; font-weight: 800; margin: 2px 0 14px; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.ht-emoji { font-size: 26px; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .12)); }
+.pomu-card { text-align: center; padding: 18px 18px 18px; border-radius: 28px; overflow: hidden; position: relative; isolation: isolate;
+  background: radial-gradient(120% 70% at 50% 0%, var(--pomu-glow), var(--surface) 62%); }
+.pomu-card.route-rich { background: radial-gradient(120% 70% at 50% 0%, color-mix(in srgb, var(--rich) 26%, var(--surface)), var(--surface) 62%); }
+.pomu-card.route-villain { background: radial-gradient(120% 70% at 50% 0%, color-mix(in srgb, var(--villain) 24%, var(--surface)), var(--surface) 62%); }
+.pomu-stage { height: calc(var(--pomu-size, 160px) + 8px); display: flex; align-items: flex-end; justify-content: center; position: relative; }
+.pomu-stage::after { content: ''; position: absolute; bottom: 2px; left: 50%; width: calc(var(--pomu-size) * .5); height: 12px; transform: translateX(-50%); border-radius: 50%; background: rgba(0, 0, 0, .07); filter: blur(3px); z-index: -1; }
+.pomu-img { width: min(var(--pomu-size, 160px), 70vw); height: auto; max-height: var(--pomu-size); object-fit: contain; animation: pomuFloat 4.5s ease-in-out infinite; transform-origin: 50% 100%; }
+@keyframes pomuFloat { 0%, 100% { transform: translateY(0) scale(1, 1); } 45% { transform: translateY(-6px) scale(.99, 1.01); } 55% { transform: translateY(-6px) scale(.99, 1.01); } }
+.pomu-meta { display: flex; justify-content: center; gap: 6px; align-items: center; margin-top: 10px; }
+.pomu-lv { font-size: 12px; font-weight: 800; padding: 2px 10px; border-radius: 99px; background: var(--text); color: var(--bg); }
+.route-chip { font-size: 11.5px; }
+.route-main .route-chip { background: var(--stamp-soft); color: var(--stamp); border-color: transparent; }
+.route-rich .route-chip { background: color-mix(in srgb, var(--rich) 20%, var(--surface)); color: #a57b17; border-color: transparent; }
+.route-villain .route-chip { background: color-mix(in srgb, var(--villain) 20%, var(--surface)); color: var(--villain); border-color: transparent; }
+.pomu-name { font-size: 22px; font-weight: 800; margin-top: 4px; }
+.pomu-desc { color: var(--muted); font-size: 13.5px; margin: 2px 0 12px; }
+.pomu-next { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; font-weight: 600; text-align: left; }
+.pomu-next b { font-size: 17px; color: var(--stamp); }
+.progress.pomu-progress { height: 10px; margin: 4px 0 8px; }
+.progress.pomu-progress span { background: linear-gradient(90deg, #f6b7a8, var(--stamp)); }
+.route-rich .progress.pomu-progress span { background: linear-gradient(90deg, #f3d98b, var(--rich)); }
+.route-villain .progress.pomu-progress span { background: linear-gradient(90deg, #c4b7e0, var(--villain)); }
+.pomu-hint { font-size: 12.5px; color: var(--muted); margin: 4px 0 0; padding: 7px 12px; border-radius: 12px; background: var(--surface-2); text-align: left; }
+.pomu-hint::before { content: '💡 '; }
+.stamp-big {
+  appearance: none; width: 100%; margin-top: 14px; min-height: 64px; border-radius: 22px; border: 2px dashed color-mix(in srgb, var(--stamp) 60%, transparent);
+  background: var(--surface); color: var(--stamp); font: inherit; font-size: 17px; font-weight: 800; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; transition: transform .2s var(--ease-spring), background .2s;
+}
+.stamp-big svg { width: 30px; height: 30px; }
+.stamp-big:not(.on) svg circle { stroke-dasharray: 4 5; }
+.stamp-big:active { transform: scale(.97); }
+.stamp-big.on { border: 2px solid transparent; background: var(--stamp-soft); }
+.stamp-big.on svg { animation: stampIn .45s var(--ease-spring); }
+.stamp-big small { flex-basis: 100%; font-size: 11.5px; font-weight: 600; color: var(--muted); margin-top: -6px; }
+@keyframes stampIn { from { transform: scale(1.8) rotate(-25deg); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* カレンダー */
+.habit-cal { padding: 14px 12px 12px; border-radius: 24px; }
+.hc-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.hc-head .icon-btn svg { width: 20px; height: 20px; }
+.hc-title { font-size: 19px; font-weight: 700; color: var(--stamp); letter-spacing: .02em; }
+.hc-title b { font-size: 26px; font-weight: 800; }
+.hc-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.hc-week span { text-align: center; font-size: 12px; font-weight: 800; color: var(--muted); padding: 4px 0 2px; }
+.hc-week .sun, .hc-day.sun .hc-num { color: var(--stamp); }
+.hc-week .sat, .hc-day.sat .hc-num { color: var(--miss); }
+.hc-day { appearance: none; border: 0; background: none; font: inherit; color: var(--text); min-height: 58px; padding: 4px 0 2px; display: flex; flex-direction: column; align-items: center; gap: 1px; border-radius: 14px; cursor: pointer; }
+span.hc-day { cursor: default; }
+.hc-num { font-size: 12.5px; font-weight: 600; line-height: 1.3; }
+.hc-mark { width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; }
+.hc-mark svg { width: 34px; height: 34px; }
+.hc-day.done .hc-mark svg { animation: stampIn .4s var(--ease-spring); }
+.hc-day.other .hc-num, .hc-day.future .hc-num, .hc-day.before .hc-num { opacity: .35; }
+.hc-day.today { background: var(--stamp-soft); }
+.hc-day.today .hc-num { color: var(--stamp); font-weight: 800; }
+.hc-day.today:not(.done) .hc-mark { border: 2px dashed color-mix(in srgb, var(--stamp) 50%, transparent); border-radius: 50%; width: 30px; height: 30px; margin: 2px; }
+button.hc-day:active { background: var(--surface-2); }
+
+/* 統計の丸 */
+.habit-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 12px; margin: 4px 0 14px; justify-items: center; }
+.hs-circle { width: min(42vw, 168px); aspect-ratio: 1; border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; text-align: center; padding-bottom: 18px; }
+.hs-circle.total { background: linear-gradient(160deg, #f9c7bd, var(--stamp)); color: #fff; box-shadow: 0 8px 22px color-mix(in srgb, var(--stamp) 35%, transparent); }
+.hs-circle.month { background: conic-gradient(var(--stamp) calc(var(--p) * 1%), color-mix(in srgb, var(--stamp) 14%, var(--surface)) 0); }
+.hs-circle.month::before { content: ''; position: absolute; inset: 9px; border-radius: 50%; background: var(--surface); box-shadow: inset 0 1px 3px rgba(0, 0, 0, .05); }
+.hs-circle.month > :not(.hs-l) { position: relative; }
+.hs-circle.month .hs-l { z-index: 1; }
+.hs-circle.streak, .hs-circle.best { background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow); }
+.hs-circle.streak { background: linear-gradient(160deg, var(--surface), var(--stamp-soft)); }
+.hs-n { font-size: 38px; font-weight: 800; line-height: 1.05; letter-spacing: -.02em; }
+.hs-n small { font-size: 14px; font-weight: 700; margin-left: 2px; }
+.hs-s { font-size: 11.5px; font-weight: 700; opacity: .85; min-height: 1.2em; }
+.hs-l { position: absolute; bottom: -10px; left: 50%; transform: translateX(-50%); white-space: nowrap; font-size: 12px; font-weight: 800; padding: 3px 11px; border-radius: 99px; background: var(--surface); color: var(--text); border: 1px solid var(--border); box-shadow: 0 2px 6px rgba(0, 0, 0, .05); }
+.hs-circle.month .hs-n, .hs-circle.streak .hs-n, .hs-circle.best .hs-n { color: var(--text); }
+.hs-circle.month .hs-s, .hs-circle.streak .hs-s, .hs-circle.best .hs-s { color: var(--muted); }
+
+/* 編集モーダル */
+.habit-name-row { display: flex; gap: 10px; align-items: flex-end; }
+.habit-name-row .field { margin-bottom: 4px; }
+.emoji-field { width: 76px; flex: none; }
+.emoji-field input { text-align: center; font-size: 22px; padding-left: 4px; padding-right: 4px; }
+.emoji-pick { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; margin: 8px 0 4px; }
+.emoji-opt { appearance: none; border: 1px solid var(--border); background: var(--surface); border-radius: 12px; font-size: 20px; height: 40px; cursor: pointer; padding: 0; }
+.emoji-opt:active { transform: scale(.92); background: var(--surface-2); }
+
+/* 図鑑 */
+.zk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 10px; margin-top: 10px; }
+.zk-tile { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 10px 6px 12px; border-radius: 18px; background: var(--surface-2); border: 1px solid var(--border); }
+.zk-img { width: 84px; height: 84px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle at 50% 60%, var(--pomu-glow), transparent 70%); }
+.route-rich .zk-img { background: radial-gradient(circle at 50% 60%, color-mix(in srgb, var(--rich) 25%, transparent), transparent 70%); }
+.route-villain .zk-img { background: radial-gradient(circle at 50% 60%, color-mix(in srgb, var(--villain) 22%, transparent), transparent 70%); }
+.zk-img img { width: 80px; height: 80px; object-fit: contain; }
+.zk-tile.locked .zk-img { background: none; }
+.zk-tile.locked img { filter: brightness(0); opacity: .13; }
+:root[data-theme="dark"] .zk-tile.locked img { filter: brightness(0) invert(1); opacity: .14; }
+.zk-cond { font-size: 10.5px; font-weight: 700; color: var(--muted); margin-top: 4px; }
+.zk-name { font-size: 14px; font-weight: 800; }
+.zk-tile.locked .zk-name { color: var(--muted); letter-spacing: .1em; }
+.zk-desc { font-size: 11px; color: var(--muted); line-height: 1.45; margin-top: 2px; }
+
+/* 進化のお祝い */
+.pomu-celebrate { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(30, 30, 35, .32); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); animation: fade .2s ease-out; }
+.pomu-celebrate.out { opacity: 0; transition: opacity .25s; }
+.pc-card { position: relative; width: min(330px, 100%); padding: 22px 20px 20px; border-radius: 30px; text-align: center; background: radial-gradient(120% 70% at 50% 0%, var(--pomu-glow), var(--surface) 65%); box-shadow: var(--shadow-lg); animation: pcPop .55s var(--ease-spring); }
+.route-rich .pc-card { background: radial-gradient(120% 70% at 50% 0%, color-mix(in srgb, var(--rich) 30%, var(--surface)), var(--surface) 65%); }
+.route-villain .pc-card { background: radial-gradient(120% 70% at 50% 0%, color-mix(in srgb, var(--villain) 30%, var(--surface)), var(--surface) 65%); }
+.pc-img { width: 190px; height: 190px; object-fit: contain; animation: pcJump 1.1s var(--ease-spring) .15s both; }
+.pc-text { font-size: 24px; font-weight: 800; margin: 4px 0 2px; color: var(--stamp); }
+.route-rich .pc-text { color: #b98a1c; }
+.route-villain .pc-text { color: var(--villain); }
+.pc-name { font-size: 13.5px; color: var(--muted); margin: 0 0 14px; }
+.pc-name b { color: var(--text); font-size: 17px; }
+.pc-burst { position: absolute; inset: 0; pointer-events: none; }
+.pc-burst i { position: absolute; left: 50%; top: 32%; font-style: normal; font-size: 22px; opacity: 0; animation: pcBit 1.4s ease-out calc(var(--k) * 70ms + .1s) forwards; --a: calc(var(--k) * 60deg); }
+@keyframes pcPop { from { transform: scale(.6); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes pcJump { 0% { transform: scale(.4) translateY(30px); opacity: 0; } 60% { transform: scale(1.08) translateY(-8px); opacity: 1; } 100% { transform: none; } }
+@keyframes pcBit { 0% { opacity: 0; transform: translate(-50%, -50%) rotate(var(--a)) translateY(0) rotate(calc(-1 * var(--a))); } 25% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -50%) rotate(var(--a)) translateY(-130px) rotate(calc(-1 * var(--a))); } }
+@media (prefers-reduced-motion: reduce) { .pomu-img, .habit-empty img, .pc-card, .pc-img, .pc-burst i { animation: none !important; } .pc-burst { display: none; } }
+@media (min-width: 960px) { .hs-circle { width: 168px; } .habit-stats { grid-template-columns: repeat(4, 1fr); } }
+.hr-lv { font-weight: 800; color: var(--stamp); }

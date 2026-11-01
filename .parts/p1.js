@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.2.6';
+  const APP_VERSION = '1.3.0';
   const DEFAULT_CATEGORIES = ['旅行', '仕事/キャリア', '健康', '家族', '趣味', '学び', 'お金', 'その他'];
   const IMPORTANCE = { high: '高', mid: '中', low: '低' };
   const IMPORTANCE_ORDER = { high: 0, mid: 1, low: 2 };
@@ -13,7 +13,7 @@
   const STATUS = { todo: '未着手', doing: '進行中', done: '完了' };
   const LESSON_STATUS = { considering: '検討中', active: '継続中', paused: '休止', ended: '終了' };
   const BACKGROUNDS = { mist: 'かすみ', sunrise: '朝焼け', forest: '森', ocean: '海', none: 'なし（無地）' };
-  const VIEW_ICON = { 'ホーム': '🏠', 'マトリックス': '🧭', 'やりたい事': '⭐', '後回しでいい事': '🕰️', '習い事': '🎹', 'コーチに相談': '💬', 'ジャーナル': '📔', '完了履歴': '🏆', '未整理（インボックス）': '📥', '検索': '🔍', '設定・バックアップ': '⚙️', 'AIに相談（Gemini）': '🤖', '見つかりません': '🫥' };
+  const VIEW_ICON = { 'ホーム': '🏠', 'マトリックス': '🧭', 'やりたい事': '⭐', '後回しでいい事': '🕰️', '習い事': '🎹', 'コーチに相談': '💬', 'ジャーナル': '📔', '完了履歴': '🏆', '未整理（インボックス）': '📥', '検索': '🔍', '設定・バックアップ': '⚙️', 'AIに相談（Gemini）': '🤖', '見つかりません': '🫥', '習慣スタンプ': '🐣', 'ぽむ図鑑': '📖' };
   const QUAD_ICON = { q1: '🔥', q2: '🌱', q3: '⚡', q4: '🍃' };
   const LIST_ICON = { task: '📌', wish: '⭐', later: '🕰️', inbox: '📥' };
   const CAT_ICONS = [[/旅|旅行|トラベル/, '✈️'], [/仕事|キャリア|職/, '💼'], [/健康|運動|体|医/, '🏃'], [/家族|子|親|恋|友/, '👨‍👩‍👧'], [/趣味|遊/, '🎨'], [/学|勉強|資格|英/, '📚'], [/お金|家計|貯|投資/, '💰'], [/家|住|引っ越|部屋/, '🏡'], [/買|ショッピング/, '🛍️'], [/料理|食/, '🍳'], [/音楽|ピアノ/, '🎵']];
@@ -98,7 +98,7 @@
 
   // ───────────────────────── 保存 ─────────────────────────
   function defaultState() {
-    return { schema: 2, categories: [...DEFAULT_CATEGORIES], categoriesAt: '', items: [], lessons: [], journal: [], coachNotes: [], focus: {}, focusAt: {}, deleted: {}, settings: { theme: 'auto', bg: 'mist' } };
+    return { schema: 2, categories: [...DEFAULT_CATEGORIES], categoriesAt: '', items: [], lessons: [], journal: [], coachNotes: [], habits: [], focus: {}, focusAt: {}, deleted: {}, settings: { theme: 'auto', bg: 'mist' } };
   }
   function normStep(s) {
     if (typeof s === 'string') s = { text: s };
@@ -148,6 +148,22 @@
     const t = nowIso();
     return { id: c.id || uid(), date: isDateStr(c.date) ? c.date : todayStr(), title: String(c.title || ''), text: String(c.text || ''), read: c.read !== false, source: c.source || '', stepsResult: Array.isArray(c.stepsResult) ? c.stepsResult.map(String) : [], createdAt: c.createdAt || t, updatedAt: c.updatedAt || t };
   }
+  // 習慣スタンプ（毎日の目標）。done は押した日の 'YYYY-MM-DD' の配列（昇順・重複なし）
+  function isRealDay(s) {
+    if (!isDateStr(s)) return false;
+    const d = new Date(s + 'T00:00:00Z');
+    return !isNaN(d) && d.toISOString().slice(0, 10) === s;
+  }
+  function normHabit(h) {
+    const t = nowIso();
+    const done = [...new Set((Array.isArray(h.done) ? h.done : []).filter(isRealDay))].sort();
+    const start = isRealDay(h.startDate) ? h.startDate : (done[0] || todayStr());
+    return {
+      id: h.id || uid(), emoji: Array.from(String(h.emoji || '').trim()).slice(0, 4).join('') || '🌱', name: String(h.name || '').trim() || '（無題）',
+      startDate: start, done, seen: String(h.seen || ''), unlocked: Array.isArray(h.unlocked) ? [...new Set(h.unlocked.map(String))] : [],
+      createdAt: h.createdAt || t, updatedAt: h.updatedAt || t,
+    };
+  }
   function normalizeState(raw) {
     const s = defaultState();
     if (!raw || typeof raw !== 'object') return s;
@@ -156,6 +172,7 @@
     s.lessons = (raw.lessons || []).map(normLesson);
     s.journal = (raw.journal || []).map(normJournal);
     s.coachNotes = (raw.coachNotes || []).map(normCoach);
+    s.habits = (Array.isArray(raw.habits) ? raw.habits : []).filter((h) => h && typeof h === 'object').map(normHabit); // v1.3.0〜（古いデータには無い）
     s.focus = raw.focus && typeof raw.focus === 'object' ? { ...raw.focus } : {};
     s.focusAt = raw.focusAt && typeof raw.focusAt === 'object' ? { ...raw.focusAt } : {};
     s.deleted = raw.deleted && typeof raw.deleted === 'object' ? { ...raw.deleted } : {};
@@ -194,7 +211,7 @@
     const next = normalizeState(JSON.parse(snap));
     const now = nowIso();
     next.deleted = { ...next.deleted, ...prev.deleted };
-    ['items', 'lessons', 'journal', 'coachNotes'].forEach((k) => {
+    ['items', 'lessons', 'journal', 'coachNotes', 'habits'].forEach((k) => {
       const prevMap = new Map(prev[k].map((x) => [x.id, JSON.stringify(x)]));
       const nextIds = new Set(next[k].map((x) => x.id));
       next[k].forEach((x) => { if (prevMap.get(x.id) !== JSON.stringify(x)) { x.updatedAt = now; delete next.deleted[x.id]; } });
@@ -244,5 +261,6 @@
     randomId: null,
     coachDays: 14,
     coachText: '',
+    habitMonth: {},
     lastRoute: '',
   };

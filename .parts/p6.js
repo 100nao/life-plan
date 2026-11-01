@@ -123,6 +123,19 @@
     setBg: (d) => { state.settings.bg = BACKGROUNDS[d.v] ? d.v : 'mist'; saveLocal(); applyTheme(); rerender(); },
     openDrawer: () => openDrawer(),
     closeDrawer: () => closeDrawer(),
+    habitToggle: (d) => toggleHabitDay(d.id, d.date),
+    habitMonth: (d) => {
+      const h = getHabit(d.id); if (!h) return;
+      const cur = todayStr().slice(0, 7); const base = ui.habitMonth[h.id] || cur;
+      if (d.dir === '0') { delete ui.habitMonth[h.id]; rerender(); return; }
+      const [y, m] = base.split('-').map(Number); const dt = new Date(y, m - 1 + Number(d.dir), 1);
+      const ym = monthKey(dt);
+      if (ym > cur || ym < h.startDate.slice(0, 7)) return;
+      ui.habitMonth[h.id] = ym; rerender();
+    },
+    editHabit: (d) => openHabitEditor(d.id),
+    deleteHabit: (d) => deleteHabit(d.id),
+    pickEmoji: (d) => { const inp = $('form[data-form=habit] input[name=emoji]', modalBox); if (inp) inp.value = d.v; },
     quickAddFromDrawer: () => { closeDrawer(); openQuickAdd({}); },
     wipeAll: async () => {
       if (!(await confirmDialog(`すべてのデータを削除します。${sync.connected ? 'GitHub 上のデータも空になります。' : ''}先にバックアップを書き出すことをおすすめします。本当に削除しますか？`, 'すべて削除', true))) return;
@@ -236,6 +249,7 @@
       case 'item': submitItem(f); break;
       case 'lesson': submitLesson(f); break;
       case 'journal': submitJournal(f); break;
+      case 'habit': submitHabit(f); break;
       case 'syncSetup': testConnection(f); break;
       case 'photoJournal': submitPhotoJournal(f); break;
       case 'obsidianPaste': submitObsidianPaste(f); break;
@@ -349,5 +363,5 @@
   if (sync.connected && sync.auto) syncNow();
 
   // テスト・デバッグ用（読み取りのみ）
-  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, syncNow: () => syncNow() };
+  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, pomu: (h, today) => { const i = pomuInfo(normHabit(h), today); return { key: i.key, name: i.name, route: i.route, lv: i.lv, total: i.total, M: i.M, streak: i.streak, best: i.best, hints: i.hints }; }, pomuChangeMsg, syncNow: () => syncNow() };
 })();

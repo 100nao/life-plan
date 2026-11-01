@@ -251,7 +251,7 @@
   }
 
   // ───────────────────────── 統合（同期・読み込み共通） ─────────────────────────
-  const SYNC_COLLECTIONS = ['items', 'lessons', 'journal', 'coachNotes'];
+  const SYNC_COLLECTIONS = ['items', 'lessons', 'journal', 'coachNotes', 'habits'];
   const canonical = (a, b) => (b.createdAt || '').localeCompare(a.createdAt || '') || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   function mergeStates(local, remote) {
     const out = normalizeState(JSON.parse(JSON.stringify(local)));

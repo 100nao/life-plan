@@ -102,7 +102,7 @@
           <h1 class="hero-title">${greet}</h1>
           <p class="hero-sub">${isEmpty ? 'やりたい事を、一歩ずつ。' : `未完了のタスク ${tasks.length}件${nStuck ? `・停滞 ${nStuck}件` : ''}・やりたい事 ${wish.length - wishDone}件`}</p></div>
       </div>
-      <div class="hero-links"><a class="hero-pill" href="#ai">🤖 AIに相談</a><a class="hero-pill" href="#matrix">🧭 マトリクス</a><a class="hero-pill" href="#journal">📔 今日を書く</a></div>
+      <div class="hero-links"><a class="hero-pill" href="#ai">🤖 AIに相談</a><a class="hero-pill" href="#habits">🐣 スタンプ</a><a class="hero-pill" href="#matrix">🧭 マトリクス</a><a class="hero-pill" href="#journal">📔 今日を書く</a></div>
     </section>`);
 
     // コーチからの新着アドバイス（いちばん目立つ場所に）
@@ -130,6 +130,9 @@
     if (!sync.connected) {
       out.push(`<a class="card hint-card" href="#settings/sync"><b>🔗 AIコーチと自動でつなぐ</b><span class="muted small">設定でトークンを1回貼るだけ。以後は自動で保存・読み込みされ、コーチのアドバイスもここに届きます。</span></a>`);
     }
+
+    // 習慣スタンプ（今日のスタンプとぽむ）
+    if (state.habits.length || !isEmpty) { checkPomuChanges(); out.push(homeHabitsCard()); }
 
     // 今年のフォーカス
     const focus = state.focus[thisYear()] || '';

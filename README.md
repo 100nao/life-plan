@@ -63,7 +63,7 @@
 
 1. [Google AI Studio（aistudio.google.com/apikey）](https://aistudio.google.com/apikey) で **APIキーを作成**（Google アカウントでログイン → 「APIキーを作成」）
 2. アプリの **設定 → AI連携（Gemini）** に貼り付け → **「接続テスト」**（成功するとキーが保存されます）
-3. モデルは `gemini-2.5-flash`（標準・既定）か `gemini-2.5-flash-lite`（軽量・速い）を選べます
+3. モデルは「最新のFlash（`gemini-flash-latest`、既定）」「`gemini-3.8-flash`」「`gemini-3.6-flash`」「`gemini-3.5-flash-lite`」から選べます。選んだモデルが使えない（404）ときは自動で次の候補に切り替わります
 
 使い方
 - ホームの「🤖 AIに相談（Gemini）」、または「コーチに相談」画面から開きます

@@ -396,7 +396,7 @@ with sync_playwright() as p:
     pg.click('.ai-setup a[href="#settings/ai"]'); wait_idle(pg, 500)
     card = pg.inner_text('#aiCard')
     check('設定：AI連携（Gemini）セクション', 'AI連携（Gemini）' in card and 'GitHubには送られません' in card and '無料枠' in card and pg.locator('#aiCard a[href="https://aistudio.google.com/apikey"]').count() == 1)
-    check('設定：モデル選択（既定 gemini-2.5-flash）', pg.eval_on_selector('form[data-form=aiSetup] select[name=model]', 'e => e.value') == 'gemini-2.5-flash' and pg.locator('form[data-form=aiSetup] option[value="gemini-2.5-flash-lite"]').count() == 1)
+    check('設定：モデル選択（既定 gemini-flash-latest）', pg.eval_on_selector('form[data-form=aiSetup] select[name=model]', 'e => e.value') == 'gemini-flash-latest' and pg.locator('form[data-form=aiSetup] option[value="gemini-3.5-flash-lite"]').count() == 1)
     check('設定：キーは伏せ字', pg.get_attribute('#aiKeyInput', 'type') == 'password')
     pg.click('[data-action=aiToggleKey]'); check('設定：キーの表示切替', pg.get_attribute('#aiKeyInput', 'type') == 'text'); pg.click('[data-action=aiToggleKey]')
     pg.fill('#aiKeyInput', 'AIza_WRONG')
@@ -406,7 +406,7 @@ with sync_playwright() as p:
     pg.click('#aiTestBtn'); wait_idle(pg, 800)
     check('接続テスト：成功でキー保存', '接続できました' in pg.inner_text('#aiMsg') and S(pg, 'LifePlan.ai.hasKey'), pg.inner_text('#aiMsg'))
     u, hdr, b = gem.reqs[-1]
-    check('API：キーはヘッダー（URLに入れない）', hdr.get('x-goog-api-key') == GKEY and GKEY not in u and 'key=' not in u and u.startswith('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'), u)
+    check('API：キーはヘッダー（URLに入れない）', hdr.get('x-goog-api-key') == GKEY and GKEY not in u and 'key=' not in u and u.startswith('https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent'), u)
     pg.evaluate('window.scrollTo(0,0)'); pg.evaluate("document.getElementById('aiCard').scrollIntoView({block:'start'})"); wait_idle(pg, 200)
     shot(pg, 'sp_settings_ai.png')
     ls = pg.evaluate("localStorage.getItem('lifeplan.ai')")

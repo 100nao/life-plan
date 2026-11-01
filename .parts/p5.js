@@ -453,8 +453,9 @@
   const AI_KEY = 'lifeplan.ai';
   const AI_HIST_KEY = 'lifeplan.aiChat';
   const AI_HIST_MAX = 50;
-  const AI_MODELS = { 'gemini-2.5-flash': 'gemini-2.5-flash（標準・おすすめ）', 'gemini-2.5-flash-lite': 'gemini-2.5-flash-lite（軽量・速い）' };
-  const AI_DEFAULT_MODEL = 'gemini-2.5-flash';
+  const AI_MODELS = { 'gemini-flash-latest': '最新のFlash（自動・おすすめ）', 'gemini-3.8-flash': 'gemini-3.8-flash（高性能）', 'gemini-3.6-flash': 'gemini-3.6-flash（標準）', 'gemini-3.5-flash-lite': 'gemini-3.5-flash-lite（軽量・速い）' };
+  const AI_DEFAULT_MODEL = 'gemini-flash-latest';
+  const AI_FALLBACKS = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-flash-lite-latest'];
   const AI_ENDPOINT = (model) => `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const AI_CHIPS = ['今週何から手をつける？', '停滞タスクの原因を一緒に考えて', 'このタスクをステップに分けて', 'ジャーナルを振り返って'];
   function loadAi() {
@@ -530,14 +531,20 @@
     const model = opts.model || ai.model;
     if (!key) throw new Error('APIキーが設定されていません。設定の「AI連携（Gemini）」で登録してください。');
     if (!navigator.onLine) throw new Error('オフラインです。インターネットに接続してから送信してください。');
-    const body = { contents, generationConfig: { temperature: opts.temperature != null ? opts.temperature : 0.7, maxOutputTokens: opts.maxTokens || 2048, thinkingConfig: { thinkingBudget: 0 } } };
+    const body = { contents, generationConfig: { maxOutputTokens: opts.maxTokens || 4096 } };
     if (opts.json) body.generationConfig.responseMimeType = 'application/json';
     if (opts.system) body.systemInstruction = { parts: [{ text: opts.system }] };
-    let res;
-    try {
-      res = await fetch(AI_ENDPOINT(model), { method: 'POST', cache: 'no-store', referrerPolicy: 'no-referrer', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(body) });
-    } catch (e) { throw new Error('Gemini に接続できません。オフラインか、通信が不安定なようです。'); }
-    let j = null; try { j = await res.json(); } catch (e) { j = null; }
+    const tryModels = [model, ...AI_FALLBACKS.filter((m) => m !== model)];
+    let res, j = null;
+    for (let i = 0; i < tryModels.length; i++) {
+      try {
+        res = await fetch(AI_ENDPOINT(tryModels[i]), { method: 'POST', cache: 'no-store', referrerPolicy: 'no-referrer', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(body) });
+      } catch (e) { throw new Error('Gemini に接続できません。オフラインか、通信が不安定なようです。'); }
+      j = null; try { j = await res.json(); } catch (e) { j = null; }
+      if (res.status === 404 && i < tryModels.length - 1) continue; // モデルが使えない → 次の候補へ自動で切り替え
+      if (res.ok && tryModels[i] !== ai.model && AI_MODELS[tryModels[i]] && !opts.key) { ai.model = tryModels[i]; try { saveAi(); } catch (e) {} }
+      break;
+    }
     if (!res.ok) throw new Error(aiErrorMessage(res.status, j));
     const cand = j && Array.isArray(j.candidates) ? j.candidates[0] : null;
     const text = cand && cand.content && Array.isArray(cand.content.parts) ? cand.content.parts.map((p) => p.text || '').join('').trim() : '';

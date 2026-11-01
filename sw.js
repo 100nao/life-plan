@@ -1,7 +1,7 @@
 /* ライフプラン Service Worker — アプリ本体をキャッシュしてオフラインで動かす。
-   ユーザーデータは localStorage にのみ保存され、ここでは一切扱わない。
+   ユーザーデータ・APIキー・AIとの会話は localStorage にのみ保存され、ここでは一切扱わない。
    アプリを更新したら CACHE_VERSION を上げること。 */
-const CACHE_VERSION = 'lifeplan-v1.0.0';
+const CACHE_VERSION = 'lifeplan-v1.2.0';
 const ASSETS = [
   './',
   './index.html',
@@ -12,7 +12,17 @@ const ASSETS = [
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',
-  './icons/favicon-32.png'
+  './icons/favicon-32.png',
+  './images/avatar-128.png',
+  './images/avatar-256.png',
+  './images/bg-mist.jpg',
+  './images/bg-sunrise.jpg',
+  './images/bg-forest.jpg',
+  './images/bg-ocean.jpg',
+  './images/bg-mist-thumb.jpg',
+  './images/bg-sunrise-thumb.jpg',
+  './images/bg-forest-thumb.jpg',
+  './images/bg-ocean-thumb.jpg'
 ];
 
 self.addEventListener('install', (event) => {
@@ -36,6 +46,8 @@ self.addEventListener('message', (event) => {
 // キャッシュ優先 + 裏で更新（stale-while-revalidate）
 self.addEventListener('fetch', (event) => {
   const req = event.request;
+  // POST（Gemini API など）と外部ドメイン（api.github.com / generativelanguage.googleapis.com）は
+  // 一切キャッシュせず、そのままネットワークへ。
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;

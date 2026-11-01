@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.0.0';
+  const APP_VERSION = '1.2.0';
   const DEFAULT_CATEGORIES = ['旅行', '仕事/キャリア', '健康', '家族', '趣味', '学び', 'お金', 'その他'];
   const IMPORTANCE = { high: '高', mid: '中', low: '低' };
   const IMPORTANCE_ORDER = { high: 0, mid: 1, low: 2 };
@@ -12,6 +12,13 @@
   const TIMEFRAME_ORDER = { thisYear: 0, y1_3: 1, y5: 2, someday: 3, '': 4 };
   const STATUS = { todo: '未着手', doing: '進行中', done: '完了' };
   const LESSON_STATUS = { considering: '検討中', active: '継続中', paused: '休止', ended: '終了' };
+  const BACKGROUNDS = { mist: 'かすみ', sunrise: '朝焼け', forest: '森', ocean: '海', none: 'なし（無地）' };
+  const VIEW_ICON = { 'ホーム': '🏠', 'マトリックス': '🧭', 'やりたい事': '⭐', '後回しでいい事': '🕰️', '習い事': '🎹', 'コーチに相談': '💬', 'ジャーナル': '📔', '完了履歴': '🏆', '未整理（インボックス）': '📥', '検索': '🔍', '設定・バックアップ': '⚙️', 'AIに相談（Gemini）': '🤖', '見つかりません': '🫥' };
+  const QUAD_ICON = { q1: '🔥', q2: '🌱', q3: '⚡', q4: '🍃' };
+  const LIST_ICON = { task: '📌', wish: '⭐', later: '🕰️', inbox: '📥' };
+  const CAT_ICONS = [[/旅|旅行|トラベル/, '✈️'], [/仕事|キャリア|職/, '💼'], [/健康|運動|体|医/, '🏃'], [/家族|子|親|恋|友/, '👨‍👩‍👧'], [/趣味|遊/, '🎨'], [/学|勉強|資格|英/, '📚'], [/お金|家計|貯|投資/, '💰'], [/家|住|引っ越|部屋/, '🏡'], [/買|ショッピング/, '🛍️'], [/料理|食/, '🍳'], [/音楽|ピアノ/, '🎵']];
+  const TITLE_ICONS = [[/旅行|旅|ツアー|オーロラ|パリ|ハワイ|USJ/, '✈️'], [/パスポート|申請|手続|書類|契約|解約/, '📄'], [/予約|病院|歯医者|眼科|ICL|検査|クリニック/, '🏥'], [/マラソン|ラン|ジョギング|ジム|筋トレ|ヨガ/, '🏃'], [/英会話|英語|勉強|資格|試験|講座|本|読/, '📚'], [/会議|資料|仕事|メール|プレゼン|パリティ/, '💼'], [/買|購入|ショッピング/, '🛍️'], [/料理|ご飯|ランチ|ディナー/, '🍳'], [/陶芸|絵|写真|カメラ|手芸/, '🎨'], [/ピアノ|ギター|歌|音楽/, '🎵'], [/引っ越|掃除|片付|部屋|家具/, '🏡'], [/お金|貯金|投資|保険|税/, '💰'], [/電話|連絡/, '📞'], [/誕生日|プレゼント|記念/, '🎁']];
+  const itemIcon = (i) => { for (const [re, e] of TITLE_ICONS) if (re.test(i.title)) return e; for (const [re, e] of CAT_ICONS) if (re.test(i.category || '')) return e; return i.quadrant ? QUAD_ICON[i.quadrant] : LIST_ICON[i.list] || '📌'; };
   const LISTS = { task: 'タスク', wish: 'やりたい事', later: '後回しでいい事', inbox: '未整理' };
   const QUADRANTS = {
     q1: { label: '緊急かつ重要', hint: '今すぐやる' },
@@ -91,7 +98,7 @@
 
   // ───────────────────────── 保存 ─────────────────────────
   function defaultState() {
-    return { schema: 2, categories: [...DEFAULT_CATEGORIES], categoriesAt: '', items: [], lessons: [], journal: [], coachNotes: [], focus: {}, focusAt: {}, deleted: {}, settings: { theme: 'auto' } };
+    return { schema: 2, categories: [...DEFAULT_CATEGORIES], categoriesAt: '', items: [], lessons: [], journal: [], coachNotes: [], focus: {}, focusAt: {}, deleted: {}, settings: { theme: 'auto', bg: 'mist' } };
   }
   function normStep(s) {
     if (typeof s === 'string') s = { text: s };
@@ -135,7 +142,7 @@
   }
   function normJournal(j) {
     const t = nowIso();
-    return { id: j.id || uid(), date: isDateStr(j.date) ? j.date : todayStr(), text: String(j.text || ''), mood: [1, 2, 3, 4, 5].includes(Number(j.mood)) ? Number(j.mood) : 0, linked: Array.isArray(j.linked) ? j.linked.map(String) : [], createdAt: j.createdAt || t, updatedAt: j.updatedAt || t };
+    return { id: j.id || uid(), date: isDateStr(j.date) ? j.date : todayStr(), text: String(j.text || ''), mood: [1, 2, 3, 4, 5].includes(Number(j.mood)) ? Number(j.mood) : 0, linked: Array.isArray(j.linked) ? j.linked.map(String) : [], source: ['photo', 'obsidian', 'ai'].includes(j.source) ? j.source : '', createdAt: j.createdAt || t, updatedAt: j.updatedAt || t };
   }
   function normCoach(c) {
     const t = nowIso();
@@ -153,7 +160,7 @@
     s.focusAt = raw.focusAt && typeof raw.focusAt === 'object' ? { ...raw.focusAt } : {};
     s.deleted = raw.deleted && typeof raw.deleted === 'object' ? { ...raw.deleted } : {};
     s.categoriesAt = String(raw.categoriesAt || '');
-    s.settings = { theme: ['auto', 'light', 'dark'].includes(raw.settings && raw.settings.theme) ? raw.settings.theme : 'auto' };
+    s.settings = { theme: ['auto', 'light', 'dark'].includes(raw.settings && raw.settings.theme) ? raw.settings.theme : 'auto', bg: BACKGROUNDS[raw.settings && raw.settings.bg] ? raw.settings.bg : 'mist' };
     return s;
   }
   function load() {
@@ -263,7 +270,7 @@
     return `<div class="empty"><div class="empty-art" aria-hidden="true">🌱</div><h3>${esc(title)}</h3><p>${body}</p>${buttons ? `<div class="btn-row center">${buttons}</div>` : ''}</div>`;
   }
   function sectionHead(title, sub = '', right = '') {
-    return `<div class="view-head"><div><h1>${esc(title)}</h1>${sub ? `<p class="sub">${sub}</p>` : ''}</div>${right}</div>`;
+    return `<div class="view-head"><div><h1>${VIEW_ICON[title] ? `<span class="h-ico" aria-hidden="true">${VIEW_ICON[title]}</span>` : ''}${esc(title)}</h1>${sub ? `<p class="sub">${sub}</p>` : ''}</div>${right}</div>`;
   }
   function itemChips(i, o = {}) {
     const c = [];
@@ -298,6 +305,7 @@
     return `<article class="card item ${i.status === 'done' ? 'is-done' : ''} ${ctx === 'matrix' ? 'compact' : ''} ${isStuck(i) ? 'is-stuck' : ''}" data-id="${i.id}" ${ctx === 'matrix' ? 'draggable="true"' : ''}>
       <div class="item-row">
         <button class="check ${i.status === 'done' ? 'on' : ''}" data-action="toggleDone" data-id="${i.id}" aria-label="${i.status === 'done' ? '未完了に戻す' : '完了にする'}">${ICON.check}</button>
+        <span class="item-ico" aria-hidden="true">${itemIcon(i)}</span>
         <div class="item-main" data-action="openItem" data-id="${i.id}" role="button" tabindex="0">
           ${ctx === 'matrix' ? actions : ''}<h3 class="item-title">${esc(i.title)}</h3>
           ${i.notes && ctx !== 'matrix' ? `<p class="item-notes">${esc(trunc(i.notes, 90))}</p>` : ''}
@@ -332,7 +340,18 @@
     const isEmpty = !items.length && !state.lessons.length && !state.journal.length;
     const out = [];
     const d = new Date();
-    out.push(sectionHead('ホーム', `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日（${'日月火水木金土'[d.getDay()]}）`));
+    const hr = d.getHours();
+    const greet = hr < 5 ? 'こんばんは' : hr < 11 ? 'おはようございます' : hr < 18 ? 'こんにちは' : 'こんばんは';
+    const nStuck = activeItems().filter(isStuck).length;
+    out.push(`<section class="hero" aria-label="ホーム">
+      <div class="hero-in">
+        <img class="avatar hero-avatar" src="images/avatar-256.png" alt="" width="72" height="72">
+        <div class="grow"><p class="hero-date">${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日（${'日月火水木金土'[d.getDay()]}）</p>
+          <h1 class="hero-title">${greet}</h1>
+          <p class="hero-sub">${isEmpty ? 'やりたい事を、一歩ずつ。' : `未完了のタスク ${tasks.length}件${nStuck ? `・停滞 ${nStuck}件` : ''}・やりたい事 ${wish.length - wishDone}件`}</p></div>
+      </div>
+      <div class="hero-links"><a class="hero-pill" href="#ai">🤖 AIに相談</a><a class="hero-pill" href="#matrix">🧭 マトリクス</a><a class="hero-pill" href="#journal">📔 今日を書く</a></div>
+    </section>`);
 
     // コーチからの新着アドバイス（いちばん目立つ場所に）
     const unread = sortedCoach().filter((c) => !c.read);
@@ -366,6 +385,9 @@
       <div class="label">${thisYear()}年のフォーカス</div>
       ${focus ? `<p class="focus-text">${esc(focus)}</p>` : '<p class="muted">タップして今年いちばん大事にしたいことを書く</p>'}
     </section>`);
+
+    // AIに相談（Gemini）
+    out.push(`<a class="card ai-entry" href="#ai"><span class="ai-emoji" aria-hidden="true">🤖</span><span class="grow"><b>AIに相談（Gemini）</b><span class="muted small">今週何から？ 停滞の原因は？ その場でコーチに聞けます</span></span><span class="chev" aria-hidden="true">›</span></a>`);
 
     // 数字
     out.push(`<section class="stats">
@@ -456,7 +478,7 @@
       </section>`);
     }
 
-    if (!isEmpty) out.push(`<div class="btn-row center muted-links"><a class="link" href="#coach">🧭 コーチに相談する</a><a class="link" href="#done">✓ 完了履歴</a></div>`);
+    if (!isEmpty) out.push(`<div class="btn-row center muted-links"><a class="link" href="#ai">🤖 AIに相談（Gemini）</a><a class="link" href="#coach">🧭 コーチに相談する</a><a class="link" href="#done">✓ 完了履歴</a></div>`);
     return out.join('');
   }
 
@@ -589,14 +611,14 @@
     const nq = q.trim().toLowerCase();
     const list = state.journal.filter((e) => !nq || e.text.toLowerCase().includes(nq) || e.date.includes(nq) || e.linked.some((id) => { const it = getItem(id); return it && it.title.toLowerCase().includes(nq); }))
       .sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
-    if (!state.journal.length) return emptyState('ジャーナルはまだありません', 'その日の出来事、気分、考えたことを短く残しておきましょう。タスクと結びつけることもできます。', '<button class="btn primary" data-action="editJournal">＋ 今日を書く</button>');
+    if (!state.journal.length) return emptyState('ジャーナルはまだありません', 'その日の出来事、気分、考えたことを短く残しておきましょう。タスクと結びつけることもできます。', '<button class="btn primary" data-action="editJournal">＋ 今日を書く</button><button class="btn soft" data-action="pickPhoto">📷 写真から追加</button><button class="btn soft" data-action="openObsidian">📝 Obsidianから取り込む</button>');
     if (!list.length) return '<p class="muted center pad">見つかりませんでした。</p>';
     let html = ''; let cur = '';
     list.forEach((e) => {
       const m = e.date.slice(0, 7);
       if (m !== cur) { cur = m; html += `<h3 class="month-head">${Number(m.slice(0, 4))}年${Number(m.slice(5, 7))}月</h3>`; }
       html += `<article class="card journal" data-action="editJournal" data-id="${e.id}" role="button" tabindex="0">
-        <div class="journal-head"><span class="mood" title="${MOOD_LABEL[e.mood] || ''}">${MOODS[e.mood] || '📝'}</span><b>${fmtDate(e.date)}</b>${e.mood ? `<span class="muted small">気分 ${e.mood}/5</span>` : ''}</div>
+        <div class="journal-head"><span class="mood" title="${MOOD_LABEL[e.mood] || ''}">${MOODS[e.mood] || '📝'}</span><b>${fmtDate(e.date)}</b>${e.mood ? `<span class="muted small">気分 ${e.mood}/5</span>` : ''}${e.source ? `<span class="chip src-chip">${{ photo: '📷 手書き', obsidian: '📝 Obsidian', ai: '🤖 AI' }[e.source]}</span>` : ''}</div>
         <p class="pre">${esc(e.text)}</p>
         ${e.linked.length ? `<div class="chips">${e.linked.map((id) => { const it = getItem(id); return it ? `<button class="chip link-chip" data-action="openItem" data-id="${it.id}">🔗 ${esc(trunc(it.title, 20))}</button>` : ''; }).join('')}</div>` : ''}
       </article>`;
@@ -607,6 +629,8 @@
     const recent = state.journal.filter((e) => e.mood && daysUntil(e.date) >= -13);
     const avg = recent.length ? (recent.reduce((a, e) => a + e.mood, 0) / recent.length).toFixed(1) : '';
     const out = [sectionHead('ジャーナル', `${state.journal.length}件${avg ? `・直近14日の気分 平均 ${avg}` : ''}`, '<button class="btn primary small" data-action="editJournal">＋ 書く</button>')];
+    out.push(`<div class="journal-tools"><button class="btn soft small" data-action="pickPhoto">📷 写真から追加</button><button class="btn soft small" data-action="openObsidian">📝 Obsidianから取り込む</button></div>
+      <input type="file" id="photoInput" accept="image/*" multiple hidden data-change="journalPhoto">`);
     out.push(`<div class="search-box"><input type="search" placeholder="ジャーナルを検索" value="${esc(ui.journalQuery)}" data-input="journalSearch" aria-label="ジャーナルを検索"></div>`);
     out.push(`<div id="journalList">${journalList(ui.journalQuery)}</div>`);
     return out.join('');
@@ -723,6 +747,7 @@
     if (!ui.coachText) ui.coachText = coachText(ui.coachDays);
     const notes = sortedCoach();
     const out = [sectionHead('コーチに相談', sync.connected ? 'GitHub 同期中：AIコーチはデータを直接読み、アドバイスは自動でホームに届きます。下のコピーは予備の方法です。' : '今の状況をまとめたテキストを作り、AIアシスタントに貼り付けて相談できます。アプリから自動送信はしません。')];
+    out.push(`<a class="card ai-entry" href="#ai"><span class="ai-emoji" aria-hidden="true">🤖</span><span class="grow"><b>AIに相談（Gemini）</b><span class="muted small">コピー＆貼り付けなしで、アプリの中でそのまま相談できます</span></span><span class="chev" aria-hidden="true">›</span></a>`);
     out.push(`<section class="card"><div class="card-head"><h2>コーチからのアドバイス（${notes.length}）</h2>${notes.some((c) => !c.read) ? '<button class="btn small soft" data-action="markAllRead">すべて既読</button>' : ''}</div>
       ${notes.length ? notes.map((c) => adviceCard(c, false)).join('') : `<p class="muted small">まだありません。${sync.connected ? 'コーチが coach-inbox.json に書くと、こことホームに表示されます。' : ''}</p>`}
     </section>`);
@@ -805,6 +830,7 @@
     const bytes = new Blob([localStorage.getItem(STORE_KEY) || '']).size;
     const out = [sectionHead('設定・バックアップ')];
     out.push(syncCard());
+    out.push(aiCard());
     out.push(`<section class="card">
       <div class="card-head"><h2>ファイルでバックアップ</h2></div>
       <p class="muted small">データはこの端末のブラウザ内（localStorage）に保存されています。${sync.connected ? 'GitHub にも自動で保存されています。' : '機種変更やブラウザのデータ削除に備えて、ときどき書き出してください。'}</p>
@@ -823,7 +849,9 @@
     </section>`);
     out.push(`<section class="card">
       <div class="card-head"><h2>表示</h2></div>
-      <div class="seg" role="group" aria-label="テーマ">${[['auto', '自動'], ['light', 'ライト'], ['dark', 'ダーク']].map(([k, l]) => `<button class="pill ${state.settings.theme === k ? 'on' : ''}" data-action="theme" data-v="${k}">${l}</button>`).join('')}</div>
+      <div class="seg" role="group" aria-label="テーマ">${[['auto', '🌗 自動'], ['light', '☀️ ライト'], ['dark', '🌙 ダーク']].map(([k, l]) => `<button class="pill ${state.settings.theme === k ? 'on' : ''}" data-action="theme" data-v="${k}">${l}</button>`).join('')}</div>
+      <p class="field-label" style="margin-top:14px">背景（ホームの上部）</p>
+      <div class="bg-pick" role="group" aria-label="背景">${Object.entries(BACKGROUNDS).map(([k, l]) => `<button class="bg-opt ${state.settings.bg === k ? 'on' : ''}" data-action="setBg" data-v="${k}" aria-pressed="${state.settings.bg === k}"><span class="bg-sw bg-sw-${k}"></span><span>${l}</span></button>`).join('')}</div>
     </section>`);
     out.push(`<section class="card">
       <div class="card-head"><h2>サンプル</h2></div>
@@ -844,7 +872,7 @@
       ${!isStandalone() ? '<p class="muted small">iPhone: Safariの共有ボタン →「ホーム画面に追加」でアプリとして使えます（HTTPSで公開されている必要があります）。</p>' : ''}
       <div class="btn-row"><button class="btn ghost danger small" data-action="wipeAll">すべてのデータを削除</button></div>
     </section>`);
-    if (arg === 'sync') setTimeout(() => { const c = $('#syncCard'); if (c) c.scrollIntoView({ block: 'start' }); }, 0);
+    if (arg === 'sync' || arg === 'ai') setTimeout(() => { const c = $(arg === 'ai' ? '#aiCard' : '#syncCard'); if (c) c.scrollIntoView({ block: 'start' }); }, 0);
     return out.join('');
   }
   const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
@@ -913,8 +941,8 @@
 
   // ───────────────────────── ルーティングと描画 ─────────────────────────
   const main = $('#main');
-  const VIEWS = { home: viewHome, matrix: viewMatrix, wish: viewWish, later: viewLater, lessons: viewLessons, inbox: viewInbox, journal: viewJournal, done: viewDone, search: viewSearch, settings: viewSettings, coach: viewCoach, item: viewItem };
-  const TITLES = { home: 'ホーム', matrix: 'マトリックス', wish: 'やりたい事', later: '後回しでいい事', lessons: '習い事', inbox: '未整理', journal: 'ジャーナル', done: '完了履歴', search: '検索', settings: '設定', coach: 'コーチに相談', item: '詳細' };
+  const VIEWS = { home: viewHome, matrix: viewMatrix, wish: viewWish, later: viewLater, lessons: viewLessons, inbox: viewInbox, journal: viewJournal, done: viewDone, search: viewSearch, settings: viewSettings, coach: viewCoach, item: viewItem, ai: viewAI };
+  const TITLES = { home: 'ホーム', matrix: 'マトリックス', wish: 'やりたい事', later: '後回しでいい事', lessons: '習い事', inbox: '未整理', journal: 'ジャーナル', done: '完了履歴', search: '検索', settings: '設定', coach: 'コーチに相談', item: '詳細', ai: 'AIに相談' };
   function route() {
     const h = decodeURIComponent(location.hash.replace(/^#\/?/, ''));
     const idx = h.indexOf('/');
@@ -935,10 +963,47 @@
     document.title = `${TITLES[r.name]}｜ライフプラン`;
     const key = r.name + '/' + r.arg;
     if (keepScroll && key === ui.lastRoute) window.scrollTo(0, y); else if (!(r.name === 'settings' && r.arg)) window.scrollTo(0, 0);
+    const changed = key !== ui.lastRoute;
     ui.lastRoute = key;
+    if (changed && !keepScroll) { main.classList.remove('view-enter'); void main.offsetWidth; main.classList.add('view-enter'); }
+    moveTabIndicator(changed);
+    if (r.name === 'ai' && !keepScroll) aiScrollBottom();
+    document.body.classList.toggle('route-ai', r.name === 'ai');
     if (r.name === 'search' && !keepScroll) setTimeout(() => { const s = $('#searchInput'); if (s) s.focus(); }, 50);
   }
   const rerender = () => render(true);
+  // ガラスのタブバー：選択中のタブへ「泡」がスライドする
+  const tabInd = $('.tab-indicator');
+  function moveTabIndicator(animate) {
+    if (!tabInd) return;
+    const a = $$('.tabbar a[data-nav]').find((x) => x.classList.contains('active') && x.offsetParent !== null);
+    if (!a || getComputedStyle(tabInd).display === 'none') { tabInd.classList.add('off'); return; }
+    if (!animate || !tabInd.dataset.ready) tabInd.classList.add('no-anim');
+    tabInd.classList.remove('off');
+    tabInd.style.width = a.offsetWidth + 'px';
+    tabInd.style.transform = `translateX(${a.offsetLeft}px)`;
+    if (tabInd.classList.contains('no-anim')) { void tabInd.offsetWidth; requestAnimationFrame(() => tabInd.classList.remove('no-anim')); }
+    tabInd.dataset.ready = '1';
+  }
+  window.addEventListener('resize', () => moveTabIndicator(false));
+  window.addEventListener('scroll', () => { document.body.classList.toggle('scrolled', window.scrollY > 8); }, { passive: true });
+  // ドロワー（ハンバーガーメニュー）
+  const drawer = $('#drawer'); const drawerBd = $('#drawerBackdrop');
+  function openDrawer() {
+    drawerBd.hidden = false; drawer.removeAttribute('inert'); drawer.setAttribute('aria-hidden', 'false');
+    requestAnimationFrame(() => { document.body.classList.add('drawer-open'); });
+    $('#menuBtn').setAttribute('aria-expanded', 'true');
+    setTimeout(() => { const f = $('.drawer-nav a.active', drawer) || $('.drawer-nav a', drawer); if (f && window.matchMedia('(pointer: fine)').matches) f.focus(); }, 60);
+  }
+  function closeDrawer() {
+    if (!document.body.classList.contains('drawer-open')) { drawerBd.hidden = true; return; }
+    document.body.classList.remove('drawer-open');
+    drawer.setAttribute('inert', ''); drawer.setAttribute('aria-hidden', 'true');
+    $('#menuBtn').setAttribute('aria-expanded', 'false');
+    setTimeout(() => { if (!document.body.classList.contains('drawer-open')) drawerBd.hidden = true; }, 320);
+  }
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && document.body.classList.contains('drawer-open')) closeDrawer(); });
+  drawer.addEventListener('click', (e) => { if (e.target.closest('a[href]')) closeDrawer(); });
   // 同期などバックグラウンドの更新：入力中・モーダル表示中は描画を後回し
   function rerenderSoft() {
     const a = document.activeElement;
@@ -946,7 +1011,7 @@
     rerender();
   }
   document.addEventListener('focusout', () => { setTimeout(() => { if (pendingRender && backdrop.hidden) { const a = document.activeElement; if (!(a && main.contains(a) && a.matches('input, textarea, select'))) rerender(); } }, 200); });
-  window.addEventListener('hashchange', () => { if (route().name !== 'coach') ui.coachText = ''; render(false); });
+  window.addEventListener('hashchange', () => { if (route().name !== 'coach') ui.coachText = ''; closeDrawer(); render(false); });
   const go = (hash) => { if (location.hash === hash) render(false); else location.hash = hash; };
 
   // ───────────────────────── モーダル・トースト ─────────────────────────
@@ -1646,6 +1711,427 @@
     }
   }
 
+  // ───────────────────────── AIに相談（Gemini） ─────────────────────────
+  // APIキー・会話履歴はこの端末の localStorage（lifeplan.ai / lifeplan.aiChat）だけに保存。
+  // state（同期・バックアップの対象）には一切入れない。
+  const AI_KEY = 'lifeplan.ai';
+  const AI_HIST_KEY = 'lifeplan.aiChat';
+  const AI_HIST_MAX = 50;
+  const AI_MODELS = { 'gemini-2.5-flash': 'gemini-2.5-flash（標準・おすすめ）', 'gemini-2.5-flash-lite': 'gemini-2.5-flash-lite（軽量・速い）' };
+  const AI_DEFAULT_MODEL = 'gemini-2.5-flash';
+  const AI_ENDPOINT = (model) => `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const AI_CHIPS = ['今週何から手をつける？', '停滞タスクの原因を一緒に考えて', 'このタスクをステップに分けて', 'ジャーナルを振り返って'];
+  function loadAi() {
+    try { const o = JSON.parse(localStorage.getItem(AI_KEY) || '{}'); return { key: String(o.key || ''), model: AI_MODELS[o.model] ? o.model : AI_DEFAULT_MODEL, share: o.share !== false }; } catch (e) { return { key: '', model: AI_DEFAULT_MODEL, share: true }; }
+  }
+  let ai = loadAi();
+  function saveAi() { try { localStorage.setItem(AI_KEY, JSON.stringify(ai)); } catch (e) { /* noop */ } }
+  function loadAiHist() { try { const a = JSON.parse(localStorage.getItem(AI_HIST_KEY) || '[]'); return Array.isArray(a) ? a.filter((m) => m && (m.role === 'user' || m.role === 'model') && typeof m.text === 'string') : []; } catch (e) { return []; } }
+  let aiHist = loadAiHist();
+  function saveAiHist() {
+    if (aiHist.length > AI_HIST_MAX) aiHist = aiHist.slice(-AI_HIST_MAX);
+    try { localStorage.setItem(AI_HIST_KEY, JSON.stringify(aiHist)); } catch (e) { /* noop */ }
+  }
+  const aiUi = { busy: false, draft: '', showKey: false };
+
+  // ユーザーデータの小さな要約（システムプロンプト用）
+  function aiContext() {
+    const L = [];
+    const act = activeItems();
+    const focus = state.focus[thisYear()] || '';
+    L.push(`今日：${fmtDate(todayStr())}`);
+    L.push(`${thisYear()}年のフォーカス：${focus || '（未設定）'}`);
+    const qOrder = { q1: 0, q2: 1, q3: 2, q4: 3, '': 4 };
+    const items = [...act].sort((a, b) => qOrder[a.quadrant] - qOrder[b.quadrant] || (isStuck(b) - isStuck(a)) || b.updatedAt.localeCompare(a.updatedAt)).slice(0, 40);
+    L.push('', `## 進行中・未完了の項目（${act.length}件${act.length > items.length ? `、上位${items.length}件のみ` : ''}）`);
+    if (!items.length) L.push('- なし');
+    items.forEach((i) => {
+      const meta = [i.quadrant ? `${i.quadrant} ${QUADRANTS[i.quadrant].label}` : '未分類', LISTS[i.list], STATUS[i.status], `重要度${IMPORTANCE[i.importance]}`, i.targetDate ? `目標日${i.targetDate}` : '', i.steps.length ? `ステップ${stepsDone(i)}/${i.steps.length}` : '', isStuck(i) ? `停滞${idleDays(i)}日` : ''].filter(Boolean).join('・');
+      const next = (i.steps.find((s) => !s.done) || {}).text;
+      L.push(`- ${trunc(i.title, 40)}［${meta}］${next ? ` 次：${trunc(next, 30)}` : ''}`);
+    });
+    const stuck = act.filter(isStuck).sort((a, b) => idleDays(b) - idleDays(a)).slice(0, 10);
+    L.push('', `## 停滞している項目（${STUCK_DAYS}日以上進捗なし）`);
+    if (!stuck.length) L.push('- なし');
+    stuck.forEach((i) => L.push(`- ${trunc(i.title, 40)}：${idleDays(i)}日／理由：${i.stuck.tags.length ? i.stuck.tags.join('、') : '未記入'}${i.stuck.text ? `／メモ：${trunc(i.stuck.text, 60)}` : ''}`));
+    L.push('', '## 習い事');
+    if (!state.lessons.length) L.push('- なし');
+    state.lessons.slice(0, 10).forEach((l) => L.push(`- ${trunc(l.name, 30)}：${LESSON_STATUS[l.status]}${l.frequency ? '・' + l.frequency : ''}・${fmtYen(l.monthlyCost)}/月・今月${sessionsThisMonth(l)}回`));
+    const j = [...state.journal].sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt)).slice(0, 10).reverse();
+    L.push('', `## 最近のジャーナル（${j.length}件）`);
+    if (!j.length) L.push('- なし');
+    j.forEach((e) => L.push(`- ${e.date}${e.mood ? ` 気分${e.mood}/5` : ''}：${trunc(e.text.replace(/\s*\n\s*/g, ' ／ '), 160)}`));
+    const s = L.join('\n');
+    return s.length > 7000 ? s.slice(0, 7000) + '\n…（以下省略）' : s;
+  }
+  function aiSystemPrompt() {
+    const P = [
+      'あなたは「ライフプラン」アプリの中にいる、あたたかく誠実なパーソナルコーチです。ユーザーは日本語話者です。必ず日本語で、やさしく・具体的に・簡潔に答えてください（長くても400〜600字程度。箇条書き歓迎）。',
+      'ユーザーはタスクを「緊急度×重要度」のマトリクスで整理しています：q1＝緊急かつ重要（今すぐやる）、q2＝重要だが緊急でない（計画してやる）、q3＝緊急だが重要でない（任せる・手早く）、q4＝どちらでもない（やめる・あとで）。q2 を大事に育てる視点を持ってください。',
+      '責めずに共感し、「次の小さな一歩」（5〜30分でできること）を必ず1つ以上提案してください。データにないことは決めつけず、必要なら1つだけ質問してください。',
+      'タスクをステップに分けてほしいと頼まれたら、説明のあとに必ず次の形式のJSONをコードブロックで付けてください（タスク名はデータの表記どおり。ステップは3〜7個、1つ30分〜1日でできる大きさ）：',
+      '```json\n{"taskTitle": "タスク名", "steps": ["ステップ1", "ステップ2"]}\n```',
+      '医療・法律・お金の重大な判断は専門家への相談もすすめてください。',
+    ];
+    if (ai.share) P.push('', '以下はユーザーの現在のデータ（アプリから自動作成した要約）です。', '---', aiContext(), '---');
+    else P.push('', '（ユーザーはタスクやジャーナルのデータを共有しない設定にしています。会話の内容だけをもとに答えてください。）');
+    return P.join('\n');
+  }
+  const isStepRequest = (t) => /ステップ|分け|分解|細かく|手順/.test(t);
+  function aiErrorMessage(status, body) {
+    const err = (body && body.error) || {};
+    const reason = JSON.stringify(err.details || '') + ' ' + (err.message || '') + ' ' + (err.status || '');
+    if (/API_KEY_INVALID|API key not valid|API_KEY/i.test(reason) || status === 401) return 'APIキーが正しくありません。設定の「AI連携（Gemini）」でキーを確認してください。';
+    if (status === 403) return 'このAPIキーでは利用できません（権限がないか、キーが無効です）。Google AI Studio でキーを確認してください。';
+    if (status === 429) return '無料枠の上限に達しました。少し待ってから（1分〜しばらく）再度お試しください。';
+    if (status === 404) return 'モデルが見つかりません。設定でモデルを変更してください。';
+    if (status === 400) return 'リクエストが受け付けられませんでした（' + trunc(String(err.message || '400'), 80) + '）';
+    if (status >= 500) return 'Gemini が混み合っているようです。少し待ってから再度お試しください。';
+    return `エラーが発生しました（${status}）${err.message ? '：' + trunc(String(err.message), 80) : ''}`;
+  }
+  async function callGemini(contents, opts = {}) {
+    const key = opts.key || ai.key;
+    const model = opts.model || ai.model;
+    if (!key) throw new Error('APIキーが設定されていません。設定の「AI連携（Gemini）」で登録してください。');
+    if (!navigator.onLine) throw new Error('オフラインです。インターネットに接続してから送信してください。');
+    const body = { contents, generationConfig: { temperature: opts.temperature != null ? opts.temperature : 0.7, maxOutputTokens: opts.maxTokens || 2048, thinkingConfig: { thinkingBudget: 0 } } };
+    if (opts.json) body.generationConfig.responseMimeType = 'application/json';
+    if (opts.system) body.systemInstruction = { parts: [{ text: opts.system }] };
+    let res;
+    try {
+      res = await fetch(AI_ENDPOINT(model), { method: 'POST', cache: 'no-store', referrerPolicy: 'no-referrer', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(body) });
+    } catch (e) { throw new Error('Gemini に接続できません。オフラインか、通信が不安定なようです。'); }
+    let j = null; try { j = await res.json(); } catch (e) { j = null; }
+    if (!res.ok) throw new Error(aiErrorMessage(res.status, j));
+    const cand = j && Array.isArray(j.candidates) ? j.candidates[0] : null;
+    const text = cand && cand.content && Array.isArray(cand.content.parts) ? cand.content.parts.map((p) => p.text || '').join('').trim() : '';
+    if (!text) {
+      const block = (j && j.promptFeedback && j.promptFeedback.blockReason) || (cand && cand.finishReason);
+      throw new Error(block === 'SAFETY' || (block && /SAFETY|BLOCK/.test(block)) ? '安全上の理由で回答が止められました。言い方を変えてもう一度お試しください。' : '回答が空でした。もう一度お試しください。');
+    }
+    return text;
+  }
+  // 返事からステップ提案（{"taskTitle", "steps"}）を取り出す
+  function aiExtractSteps(text) {
+    if (!/"steps"\s*:/.test(text)) return null;
+    const obj = extractJson(text);
+    if (!obj) return null;
+    const list = (Array.isArray(obj) ? obj : Array.isArray(obj.tasks) ? obj.tasks : [obj])
+      .filter((t) => t && typeof t === 'object' && String(t.taskTitle || t.title || t.task || '').trim() && Array.isArray(t.steps) && t.steps.length)
+      .map((t) => ({ taskTitle: String(t.taskTitle || t.title || t.task).trim(), steps: t.steps.map((s) => String(typeof s === 'object' && s ? s.text || s.title || '' : s).trim()).filter(Boolean).slice(0, 15) }));
+    return list.length ? list : null;
+  }
+  const aiDisplayText = (m) => (m.steps ? m.text.replace(/```(?:json)?\s*[\s\S]*?"steps"[\s\S]*?```/gi, '').trim() : m.text);
+  function aiFormat(text) {
+    return esc(text)
+      .replace(/^#{1,4}\s*(.+)$/gm, '<b>$1</b>')
+      .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
+      .replace(/^(\s*)[*-]\s+/gm, '$1・')
+      .replace(/```(?:\w+)?\n?/g, '');
+  }
+  async function aiSend(text) {
+    text = String(text || '').trim();
+    if (!text || aiUi.busy) return;
+    if (!ai.key) { toast('先に設定でGeminiのAPIキーを登録してください'); go('#settings/ai'); return; }
+    const userMsg = { id: uid(), role: 'user', text, at: nowIso() };
+    aiHist.push(userMsg); saveAiHist();
+    aiUi.busy = true; aiUi.draft = '';
+    if (route().name === 'ai') { rerender(); aiScrollBottom(); }
+    const history = aiHist.filter((m) => !m.error).slice(-20);
+    const contents = history.map((m) => ({ role: m.role, parts: [{ text: m.text }] }));
+    if (isStepRequest(text)) contents[contents.length - 1].parts[0].text += '\n\n（アプリへの取り込み用に、回答の最後に {"taskTitle": "…", "steps": ["…"]} 形式のJSONをコードブロックで付けてください）';
+    try {
+      const reply = await callGemini(contents, { system: aiSystemPrompt() });
+      aiHist.push({ id: uid(), role: 'model', text: reply, at: nowIso(), steps: aiExtractSteps(reply) || undefined });
+    } catch (e) {
+      aiHist.push({ id: uid(), role: 'model', text: e.message || String(e), at: nowIso(), error: true });
+    } finally {
+      aiUi.busy = false; saveAiHist();
+      if (route().name === 'ai' && backdrop.hidden) {
+        const a = document.activeElement; const typing = a && a.matches && a.matches('form[data-form=aiChat] textarea');
+        rerender(); aiScrollBottom();
+        if (typing) { const t = $('form[data-form=aiChat] textarea'); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }
+      } else if (route().name === 'ai') pendingRender = true;
+      else toast('🤖 AIから返事が届きました', { label: '開く', run: () => go('#ai') });
+    }
+  }
+  function aiScrollBottom() { setTimeout(() => { const c = $('#aiChatEnd'); if (c) c.scrollIntoView({ block: 'end' }); }, 30); }
+  function aiBubble(m) {
+    if (m.role === 'user') return `<div class="bubble-row me"><div class="bubble me"><p class="pre">${esc(m.text)}</p></div></div>`;
+    const tools = m.error ? '' : `<div class="bubble-tools">
+        ${m.steps ? `<button class="btn small ${m.stepsAdded ? 'soft' : 'primary'}" data-action="aiAddSteps" data-id="${m.id}" ${m.stepsAdded ? 'disabled' : ''}>${m.stepsAdded ? '✓ ステップに追加済み' : '＋ ステップに追加'}</button>` : ''}
+        <button class="btn small soft" data-action="aiSaveJournal" data-id="${m.id}" ${m.savedJournal ? 'disabled' : ''}>${m.savedJournal ? '✓ ジャーナルに保存済み' : '📓 ジャーナルに保存'}</button>
+        <button class="btn small ghost" data-action="aiCopy" data-id="${m.id}">コピー</button></div>`;
+    const stepsBox = m.steps ? `<div class="steps-result">${m.steps.map((t) => `<b>${esc(t.taskTitle)}</b><ol>${t.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>`).join('')}</div>` : '';
+    return `<div class="bubble-row ai"><div class="bubble ai ${m.error ? 'error' : ''}">${m.error ? '<b>⚠️ </b>' : ''}<div class="pre">${aiFormat(aiDisplayText(m))}</div>${stepsBox}${tools}</div></div>`;
+  }
+  function viewAI() {
+    const out = [sectionHead('AIに相談（Gemini）', ai.share ? 'タスク・ジャーナルの要約を添えて Google Gemini に相談します。' : 'データは共有せず、会話だけで相談します。',
+      aiHist.length ? '<button class="btn ghost small" data-action="aiClear">会話をクリア</button>' : '')];
+    if (!ai.key) {
+      out.push(`<section class="card ai-setup"><h2>🔑 はじめに APIキーを登録</h2>
+        <p class="small">Google AI Studio で無料の Gemini APIキーを作り、設定に貼り付けるだけで使えます（無料枠の範囲で利用できます）。</p>
+        <div class="btn-row"><a class="btn primary" href="#settings/ai">設定を開く</a><a class="btn soft" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">APIキーを作る ↗</a></div></section>`);
+    }
+    out.push(`<div class="chat" id="aiChat" aria-live="polite">${aiHist.length ? aiHist.map(aiBubble).join('') : `<div class="chat-empty muted small">今の状況をふまえて、AIコーチがいっしょに考えます。下のボタンから気軽にどうぞ。</div>`}
+      ${aiUi.busy ? '<div class="bubble-row ai"><div class="bubble ai loading" role="status"><span class="dots"><i></i><i></i><i></i></span> 考えています…</div></div>' : ''}<div id="aiChatEnd"></div></div>`);
+    out.push(`<div class="chat-dock">
+      <div class="seg-scroll chips-row">${AI_CHIPS.map((c) => `<button class="pill" data-action="aiChip" data-v="${esc(c)}" ${aiUi.busy ? 'disabled' : ''}>${esc(c)}</button>`).join('')}</div>
+      <form class="chat-form" data-form="aiChat">
+        <textarea name="text" rows="1" placeholder="AIに相談したいことを入力…" data-input="aiDraft" aria-label="メッセージ" enterkeyhint="send">${esc(aiUi.draft)}</textarea>
+        <button class="btn primary send" type="submit" ${aiUi.busy ? 'disabled' : ''} aria-label="送信">送信</button>
+      </form>
+      <label class="switch-line small"><input type="checkbox" data-change="aiShare" ${ai.share ? 'checked' : ''}> タスクとジャーナルを共有する</label>
+    </div>`);
+    return out.join('');
+  }
+  function aiCard() {
+    return `<section class="card ai-card" id="aiCard">
+      <div class="card-head"><h2>🤖 AI連携（Gemini）</h2><span class="chip ${ai.key ? 'sync-ok' : ''}">${ai.key ? 'キー登録済み' : '未設定'}</span></div>
+      <p class="small">Google の Gemini に、アプリの中から直接相談できます（<a class="link" href="#ai">AIに相談</a>）。</p>
+      <form data-form="aiSetup" class="ai-form">
+        <label class="field"><span class="field-label">Gemini APIキー</span>
+          <span class="key-row"><input name="key" id="aiKeyInput" type="${aiUi.showKey ? 'text' : 'password'}" placeholder="${ai.key ? '••••••（保存済み）' : 'AIza…'}" value="${esc(ai.key)}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+          <button type="button" class="btn soft small" data-action="aiToggleKey">${aiUi.showKey ? '隠す' : '表示'}</button></span></label>
+        <label class="field"><span class="field-label">モデル</span><select name="model">${options(AI_MODELS, ai.model)}</select></label>
+        <div class="btn-row"><button class="btn primary small" type="submit">保存</button><button type="button" class="btn soft small" data-action="aiTest" id="aiTestBtn">接続テスト</button>${ai.key ? '<button type="button" class="btn ghost danger small" data-action="aiDeleteKey">キーを削除</button>' : ''}</div>
+        <p class="sync-msg small" id="aiMsg"></p>
+      </form>
+      <ul class="small muted note-list">
+        <li>キーはこの端末だけに保存され、GitHubには送られません（バックアップにも含まれません）。</li>
+        <li>無料枠の範囲で使えます（上限を超えると少し待つ必要があります）。無料枠では、送った内容が Google のサービス改善に使われることがあります。</li>
+        <li>キーの作成：<a class="link" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio（aistudio.google.com/apikey）↗</a></li>
+      </ul>
+    </section>`;
+  }
+  async function aiTest() {
+    const inp = $('#aiKeyInput'); const msg = $('#aiMsg'); const btn = $('#aiTestBtn');
+    const key = (inp && inp.value.trim()) || ai.key;
+    const sel = $('form[data-form=aiSetup] select[name=model]');
+    const model = (sel && sel.value) || ai.model;
+    if (!key) { msg.textContent = 'APIキーを貼り付けてください'; return; }
+    btn.disabled = true; msg.textContent = '接続を確認しています…';
+    try {
+      await callGemini([{ role: 'user', parts: [{ text: '接続テストです。「OK」とだけ返してください。' }] }], { key, model, maxTokens: 20 });
+      ai.key = key; ai.model = model; saveAi();
+      msg.textContent = '✓ 接続できました（キーを保存しました）';
+      toast('Gemini と接続できました ✓');
+    } catch (e) { msg.textContent = '⚠️ ' + (e.message || e); }
+    btn.disabled = false;
+  }
+  function openAiStepPicker() {
+    const act = activeItems().sort((a, b) => (isStuck(b) - isStuck(a)) || b.updatedAt.localeCompare(a.updatedAt)).slice(0, 30);
+    openModal(`${modalHead('どのタスクを分けますか？')}
+      <p class="muted small">選ぶと、AIがステップを提案します。「ステップに追加」でそのタスクに取り込めます。</p>
+      <ul class="plain-list pick-list">${act.map((i) => `<li><button class="pick-task" data-action="aiPickTask" data-v="${esc(i.title)}"><span class="grow">${esc(i.title)}</span><span class="muted small">${i.quadrant ? QUADRANTS[i.quadrant].label : LISTS[i.list]}${i.steps.length ? `・${stepsDone(i)}/${i.steps.length}` : ''}${isStuck(i) ? '・停滞' : ''}</span></button></li>`).join('') || '<li class="muted small">未完了のタスクがありません</li>'}</ul>
+      <button class="btn ghost wide" data-action="aiPickCustom">自分で入力する</button>`);
+  }
+
+  // ───────────────────────── ジャーナル：写真（手書き）から追加 ─────────────────────────
+  // 画像はこの画面の中（メモリ）でだけ扱い、state・同期・バックアップには保存しない。保存するのは文字だけ（source:'photo'）。
+  const photo = { queue: [], cur: null, total: 0, busy: false };
+  const PHOTO_PROMPT = [
+    'この写真は、日本語で手書きされたジャーナル（日記・メモ）のページです。',
+    '書かれている文字を、意味を変えずに一字一句できるだけ忠実に書き起こしてください。改行・箇条書き・段落はそのまま残し、要約・言い換え・補足はしないでください。',
+    '読めない部分は ［判読不能］ と書いてください。',
+    'ページに日付が書かれていれば date に YYYY-MM-DD 形式で入れてください（年が書かれていなければ、今日 TODAY に最も近い過去の年を補ってください）。書かれていなければ null。',
+    '文中に出てくる「やること・やりたいこと・タスク」を tasksMentioned に短い名前で入れてください（なければ空配列）。',
+    '緊急度×重要度のマトリクス（4つの枠）が描かれていれば、各枠に書かれた項目を quadrantHints の q1（緊急かつ重要）・q2（重要だが緊急でない）・q3（緊急だが重要でない）・q4（どちらでもない）に入れてください。マトリクスがなければ quadrantHints は null。',
+    '次のJSONだけを返してください：{"date": "YYYY-MM-DD" または null, "text": "書き起こし全文", "tasksMentioned": ["…"], "quadrantHints": {"q1": [], "q2": [], "q3": [], "q4": []} または null}',
+  ].join('\n');
+  function loadImageFile(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => { resolve({ img, done: () => URL.revokeObjectURL(url) }); };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('この画像は読み込めませんでした（形式に未対応の可能性があります。iPhoneの写真なら、そのまま「写真ライブラリ」から選ぶと自動で変換されます）')); };
+      img.decoding = 'async';
+      img.src = url; // 画像の向き（EXIF）はブラウザが自動で補正（image-orientation: from-image）
+    });
+  }
+  function drawScaled(img, max, quality) {
+    const w = img.naturalWidth || img.width; const h = img.naturalHeight || img.height;
+    if (!w || !h) throw new Error('画像のサイズを読み取れませんでした');
+    const r = Math.min(1, max / Math.max(w, h));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w * r)); c.height = Math.max(1, Math.round(h * r));
+    const g = c.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+    g.drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', quality);
+  }
+  async function compressImage(file) {
+    const { img, done } = await loadImageFile(file);
+    try { return { full: drawScaled(img, 1600, 0.8), thumb: drawScaled(img, 480, 0.7) }; } finally { done(); }
+  }
+  const normDetectedDate = (s) => {
+    const m = String(s || '').match(/(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})/);
+    if (!m) return '';
+    const d = `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`;
+    return isDateStr(d) && !isNaN(new Date(d + 'T00:00:00')) ? d : '';
+  };
+  function parsePhotoResult(text) {
+    let o = null;
+    try { o = JSON.parse(text); } catch (e) { o = extractJson(text); }
+    if (Array.isArray(o)) o = o[0];
+    if (!o || typeof o !== 'object') o = { text };
+    const list = (a) => (Array.isArray(a) ? a.map((x) => String(typeof x === 'object' && x ? x.title || x.text || '' : x).trim()).filter(Boolean).slice(0, 30) : []);
+    const qh = o.quadrantHints && typeof o.quadrantHints === 'object' ? o.quadrantHints : null;
+    const quads = qh ? { q1: list(qh.q1), q2: list(qh.q2), q3: list(qh.q3), q4: list(qh.q4) } : null;
+    return { date: normDetectedDate(o.date), text: String(o.text || '').trim(), tasks: list(o.tasksMentioned), quads: quads && Object.values(quads).some((a) => a.length) ? quads : null };
+  }
+  function pickPhoto() {
+    if (!ai.key) {
+      openModal(`${modalHead('写真から追加')}<p>手書きの読み取りには Gemini（無料枠あり）を使います。先に設定で APIキーを登録してください。</p>
+        <div class="btn-row end"><button class="btn ghost" data-action="closeModal">閉じる</button><button class="btn primary" data-action="goAiSettings">設定を開く</button></div>`);
+      return;
+    }
+    const inp = $('#photoInput'); if (inp) { inp.value = ''; inp.click(); }
+  }
+  function startPhotoQueue(files) {
+    files = [...files].filter((f) => /^image\//.test(f.type) || /\.(heic|heif|jpe?g|png|webp)$/i.test(f.name));
+    if (!files.length) { toast('画像ファイルを選んでください'); return; }
+    photo.queue = files.slice(0, 10); photo.total = photo.queue.length;
+    if (files.length > 10) toast('一度に読み取れるのは10枚までです');
+    nextPhoto();
+  }
+  function photoStepLabel() { return photo.total > 1 ? `（${photo.total - photo.queue.length}/${photo.total}枚目）` : ''; }
+  async function nextPhoto() {
+    const file = photo.queue.shift();
+    if (!file) { photo.cur = null; closeModal(); return; }
+    photo.cur = null; photo.busy = true;
+    openModal(`${modalHead('手書きを読み取り中' + photoStepLabel())}<div class="photo-loading"><div class="photo-thumb skeleton"></div><p class="muted"><span class="dots"><i></i><i></i><i></i></span> Gemini で文字を書き起こしています…</p></div>`, { onClose: () => { photo.queue = []; photo.cur = null; } });
+    let thumb = '';
+    try {
+      const img = await compressImage(file);
+      thumb = img.thumb;
+      const t = $('.photo-loading .photo-thumb'); if (t) t.outerHTML = `<img class="photo-thumb" src="${img.thumb}" alt="選んだ写真">`;
+      const reply = await callGemini([{ role: 'user', parts: [{ inline_data: { mime_type: 'image/jpeg', data: img.full.split(',')[1] } }, { text: PHOTO_PROMPT.replace('TODAY', todayStr()) }] }], { json: true, temperature: 0.1, maxTokens: 4096 });
+      if (backdrop.hidden) return; // 途中で閉じた
+      photo.cur = { thumb, name: file.name, ...parsePhotoResult(reply) };
+      photo.busy = false;
+      openPhotoReview();
+    } catch (e) {
+      photo.busy = false;
+      if (backdrop.hidden) return;
+      openModal(`${modalHead('読み取れませんでした' + photoStepLabel())}${thumb ? `<img class="photo-thumb" src="${thumb}" alt="選んだ写真">` : ''}<p class="error-text">⚠️ ${esc(e.message || e)}</p>
+        <div class="btn-row end">${photo.queue.length ? '<button class="btn ghost" data-action="photoSkip">次の写真へ</button>' : '<button class="btn ghost" data-action="closeModal">閉じる</button>'}</div>`, { onClose: () => { photo.queue = []; } });
+    }
+  }
+  function openPhotoReview() {
+    const c = photo.cur; if (!c) return;
+    const existing = new Set(state.items.map((i) => norm(i.title)));
+    const quadHtml = c.quads ? `<div class="field photo-quads"><span class="field-label">マトリクスを検出しました</span>
+        <div class="quad-mini">${['q1', 'q2', 'q3', 'q4'].map((q) => `<div class="qm ${q}"><b>${QUADRANTS[q].label}</b>${c.quads[q].length ? `<ul>${c.quads[q].map((t) => `<li class="${existing.has(norm(t)) ? 'exists' : ''}">${esc(t)}${existing.has(norm(t)) ? '<small>（登録済み）</small>' : ''}</li>`).join('')}</ul>` : '<p class="muted small">なし</p>'}</div>`).join('')}</div>
+        <button type="button" class="btn soft small" data-action="photoApplyMatrix" ${c.quadsApplied ? 'disabled' : ''}>${c.quadsApplied ? '✓ マトリクスに反映済み' : '▦ マトリクスに反映'}</button></div>` : '';
+    const newTasks = c.tasks.filter((t) => !existing.has(norm(t)) && !(c.quads && Object.values(c.quads).some((a) => a.some((x) => norm(x) === norm(t)))));
+    const taskHtml = newTasks.length ? `<div class="field"><span class="field-label">文中のタスク（チェックしたものを「未整理」に追加）</span><div class="link-list">${newTasks.map((t) => `<label class="link-opt"><input type="checkbox" name="task" value="${esc(t)}"><span>${esc(t)}</span></label>`).join('')}</div></div>` : '';
+    openModal(`${modalHead('読み取り結果を確認' + photoStepLabel())}
+      <form data-form="photoJournal" class="photo-review">
+        <img class="photo-thumb" src="${c.thumb}" alt="読み取った写真" data-action="photoZoom">
+        <p class="muted small">写真そのものは保存されません（文字だけ保存）。内容を確認・修正してから保存してください。</p>
+        <label class="field"><span class="field-label">日付${c.date ? '<small class="ok-text">（ページの日付を検出）</small>' : ''}</span><input type="date" name="date" value="${esc(c.date || todayStr())}" required></label>
+        <div class="field"><span class="field-label">気分（任意）</span><div class="mood-pick">${[1, 2, 3, 4, 5].map((n) => `<label title="${MOOD_LABEL[n]}"><input type="radio" name="mood" value="${n}"><span>${MOODS[n]}<small>${n}</small></span></label>`).join('')}</div></div>
+        <label class="field"><span class="field-label">書き起こし</span><textarea name="text" rows="10">${esc(c.text)}</textarea></label>
+        ${quadHtml}${taskHtml}
+        <div class="btn-row between"><button type="button" class="btn ghost" data-action="${photo.queue.length ? 'photoSkip' : 'closeModal'}">${photo.queue.length ? 'この写真はスキップ' : 'キャンセル'}</button><button class="btn primary" type="submit">保存${photo.queue.length ? 'して次へ' : ''}</button></div>
+      </form>`, { onClose: () => { photo.queue = []; photo.cur = null; } });
+  }
+  function photoApplyMatrix() {
+    const c = photo.cur; if (!c || !c.quads) return;
+    const snap = snapshot();
+    const existing = new Set(state.items.map((i) => norm(i.title)));
+    let added = 0; let skipped = 0; const t = nowIso();
+    ['q1', 'q2', 'q3', 'q4'].forEach((q) => c.quads[q].forEach((title) => {
+      if (existing.has(norm(title))) { skipped++; return; }
+      existing.add(norm(title));
+      state.items.unshift(normItem({ title: trunc(title, 120), list: 'task', quadrant: q, importance: q === 'q1' || q === 'q2' ? 'high' : 'mid', source: 'photo', createdAt: t, updatedAt: t }));
+      added++;
+    }));
+    save(); c.quadsApplied = true;
+    // フォームの入力内容を保ったまま、ボタンだけ更新
+    const b = $('[data-action=photoApplyMatrix]'); if (b) { b.disabled = true; b.textContent = '✓ マトリクスに反映済み'; }
+    toast(`マトリクスに ${added}件 追加${skipped ? `（登録済み ${skipped}件 はスキップ）` : ''}`, added ? { label: '元に戻す', run: () => { restore(snap); c.quadsApplied = false; if (b) { b.disabled = false; b.textContent = '▦ マトリクスに反映'; } rerender(); } } : undefined);
+  }
+  function submitPhotoJournal(form) {
+    const fd = new FormData(form);
+    const text = String(fd.get('text') || '').trim();
+    if (!text) { toast('内容が空です'); return; }
+    const date = isDateStr(String(fd.get('date'))) ? String(fd.get('date')) : todayStr();
+    const dup = state.journal.some((e) => e.date === date && e.text.trim() === text);
+    if (!dup) state.journal.push(normJournal({ date, text, mood: Number(fd.get('mood')) || 0, source: 'photo' }));
+    const t = nowIso(); let nt = 0;
+    fd.getAll('task').map(String).forEach((title) => { if (!state.items.some((i) => norm(i.title) === norm(title))) { state.items.unshift(normItem({ title: trunc(title, 120), list: 'inbox', source: 'photo', createdAt: t, updatedAt: t })); nt++; } });
+    save(); rerender();
+    toast(dup ? '同じ内容のジャーナルが既にあるため、保存しませんでした' : `ジャーナルを保存しました${nt ? `（未整理に ${nt}件 追加）` : ''}`);
+    if (photo.queue.length) nextPhoto(); else { photo.cur = null; closeModal(); }
+  }
+
+  // ───────────────────────── ジャーナル：Obsidian（.md / .txt）から取り込み ─────────────────────────
+  function parseNote(raw, fileName = '', lastModified = 0) {
+    let text = String(raw || '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+    let date = '';
+    const fm = text.match(/^---\n([\s\S]*?)\n---[ \t]*(?:\n|$)/);
+    if (fm) {
+      const m = fm[1].match(/^\s*(?:date|created|day|日付)\s*:\s*["']?([^"'\n]+)/im);
+      if (m) date = normDetectedDate(m[1]);
+      text = text.slice(fm[0].length);
+    }
+    const fromMeta = !!date;
+    if (!date && fileName) date = normDetectedDate(fileName.replace(/\.(md|txt|markdown)$/i, '')) || (() => { const m = fileName.match(/(\d{4})(\d{2})(\d{2})/); return m ? normDetectedDate(`${m[1]}-${m[2]}-${m[3]}`) : ''; })();
+    if (!date && lastModified) date = todayStr(new Date(lastModified));
+    text = text.trim();
+    // 先頭の見出しが日付だけなら省く（例：# 2026-11-01）
+    const h = text.match(/^#{1,6}\s*([^\n]*)\n?/);
+    if (h && normDetectedDate(h[1]) && h[1].replace(/[\d\s\-/.年月日()（）月火水木金土日曜]/g, '') === '') text = text.slice(h[0].length).trim();
+    return { date: date || todayStr(), text, fromMeta };
+  }
+  function importNotes(notes) {
+    const snap = snapshot();
+    let added = 0; let dup = 0; let empty = 0;
+    notes.forEach((n) => {
+      if (!n.text) { empty++; return; }
+      if (state.journal.some((e) => e.date === n.date && e.text.trim() === n.text.trim())) { dup++; return; }
+      state.journal.push(normJournal({ date: n.date, text: n.text, mood: 0, source: 'obsidian' }));
+      added++;
+    });
+    if (added) save();
+    const msg = `${added}件 取り込みました${dup ? `・重複 ${dup}件 はスキップ` : ''}${empty ? `・空のファイル ${empty}件` : ''}`;
+    return { added, dup, empty, msg, snap };
+  }
+  function openObsidianImport() {
+    openModal(`${modalHead('Obsidianから取り込む')}
+      <p class="small">Obsidian のノート（<b>.md</b> / <b>.txt</b>）を選ぶと、1ファイル＝1件のジャーナルとして取り込みます。複数選択できます。</p>
+      <ul class="small muted note-list"><li>日付は「フロントマターの date:」→「ファイル名（例：2026-11-01.md）」→「ファイルの更新日」の順に決めます。</li><li>フロントマター（--- で囲まれた部分）は取り除きます。同じ日付・同じ内容は重複として飛ばします。</li></ul>
+      <div class="btn-row"><button type="button" class="btn primary" data-action="obsidianPick">📂 ファイルを選ぶ</button></div>
+      <input type="file" id="obsidianInput" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple hidden data-change="obsidianFiles">
+      <hr class="sep">
+      <form data-form="obsidianPaste">
+        <label class="field"><span class="field-label">または、ノートの本文を貼り付け</span><textarea name="text" rows="6" placeholder="Obsidian でコピーした本文（フロントマター付きでもOK）"></textarea></label>
+        <label class="field"><span class="field-label">日付（フロントマターに date があればそちらを優先）</span><input type="date" name="date" value="${todayStr()}"></label>
+        <div class="btn-row end"><button type="button" class="btn ghost" data-action="closeModal">閉じる</button><button class="btn primary" type="submit">取り込む</button></div>
+      </form>`);
+  }
+  async function importObsidianFiles(files) {
+    files = [...files].filter((f) => /\.(md|markdown|txt)$/i.test(f.name) || /^text\//.test(f.type));
+    if (!files.length) { toast('.md / .txt ファイルを選んでください'); return; }
+    const notes = [];
+    for (const f of files) { try { notes.push(parseNote(await f.text(), f.name, f.lastModified)); } catch (e) { /* 読めないファイルは飛ばす */ } }
+    const r = importNotes(notes);
+    closeModal(); rerender();
+    toast('📝 ' + r.msg, r.added ? { label: '元に戻す', run: () => { restore(r.snap); rerender(); } } : undefined);
+  }
+  function submitObsidianPaste(form) {
+    const fd = new FormData(form);
+    const raw = String(fd.get('text') || '');
+    if (!raw.trim()) { toast('本文を貼り付けてください'); return; }
+    const n = parseNote(raw);
+    if (!n.fromMeta) n.date = isDateStr(String(fd.get('date'))) ? String(fd.get('date')) : todayStr();
+    const r = importNotes([n]);
+    closeModal(); rerender();
+    toast('📝 ' + r.msg, r.added ? { label: '元に戻す', run: () => { restore(r.snap); rerender(); } } : undefined);
+  }
+
   // ───────────────────────── アクション ─────────────────────────
   function stepOf(d) { const i = getItem(d.id); return i ? [i, i.steps.find((s) => s.id === d.step)] : [null, null]; }
   const actions = {
@@ -1767,6 +2253,10 @@
       save(); rerender();
     },
     theme: (d) => { state.settings.theme = d.v; saveLocal(); applyTheme(); rerender(); },
+    setBg: (d) => { state.settings.bg = BACKGROUNDS[d.v] ? d.v : 'mist'; saveLocal(); applyTheme(); rerender(); },
+    openDrawer: () => openDrawer(),
+    closeDrawer: () => closeDrawer(),
+    quickAddFromDrawer: () => { closeDrawer(); openQuickAdd({}); },
     wipeAll: async () => {
       if (!(await confirmDialog(`すべてのデータを削除します。${sync.connected ? 'GitHub 上のデータも空になります。' : ''}先にバックアップを書き出すことをおすすめします。本当に削除しますか？`, 'すべて削除', true))) return;
       const snap = snapshot();
@@ -1780,6 +2270,44 @@
     syncPullOnly: async () => { await syncNow({ pullOnly: true }); toast(sync.lastError ? '⚠️ ' + sync.lastError : 'GitHub から読み込みました'); },
     syncInboxNow: async () => {
       try { const n = await pullCoachInbox(); toast(n ? `新着 ${n}件` : '新着はありません'); } catch (e) { toast('⚠️ ' + e.message); }
+    },
+    pickPhoto: () => pickPhoto(),
+    goAiSettings: () => { closeModal(); go('#settings/ai'); },
+    photoSkip: () => nextPhoto(),
+    photoApplyMatrix: () => photoApplyMatrix(),
+    photoZoom: (d, el) => { el.classList.toggle('zoom'); },
+    openObsidian: () => openObsidianImport(),
+    obsidianPick: () => { const i = $('#obsidianInput'); if (i) { i.value = ''; i.click(); } },
+    aiChip: (d) => {
+      if (d.v === 'このタスクをステップに分けて') return openAiStepPicker();
+      aiSend(d.v);
+    },
+    aiPickTask: (d) => { closeModal(); aiSend(`「${d.v}」をステップに分けて`); },
+    aiPickCustom: () => { closeModal(); aiUi.draft = '「」をステップに分けて'; rerender(); const t = $('form[data-form=aiChat] textarea'); if (t) { t.focus(); t.setSelectionRange(1, 1); } },
+    aiClear: async () => {
+      if (!(await confirmDialog('この端末に保存されているAIとの会話をすべて消します。', 'クリアする', true))) return;
+      aiHist = []; saveAiHist(); rerender(); toast('会話をクリアしました');
+    },
+    aiAddSteps: (d) => {
+      const m = aiHist.find((x) => x.id === d.id); if (!m || !m.steps) return;
+      const snap = snapshot();
+      const msgs = applyStepSets(m.steps);
+      if (!msgs.length) { toast('追加できるステップがありませんでした'); return; }
+      save(); m.stepsAdded = true; saveAiHist(); rerender();
+      toast(msgs.join(' ／ '), { label: '元に戻す', run: () => { restore(snap); m.stepsAdded = false; saveAiHist(); rerender(); } });
+    },
+    aiSaveJournal: (d) => {
+      const m = aiHist.find((x) => x.id === d.id); if (!m) return;
+      const q = [...aiHist.slice(0, aiHist.indexOf(m))].reverse().find((x) => x.role === 'user');
+      state.journal.push(normJournal({ date: todayStr(), text: `🤖 AIに相談（Gemini）${q ? '\n相談：' + q.text : ''}\n\n${aiDisplayText(m)}`, mood: 0, source: 'ai' }));
+      save(); m.savedJournal = true; saveAiHist(); rerender(); toast('ジャーナルに保存しました', { label: '開く', run: () => go('#journal') });
+    },
+    aiCopy: async (d) => { const m = aiHist.find((x) => x.id === d.id); if (m) toast((await copyText(aiDisplayText(m))) ? 'コピーしました' : 'コピーできませんでした'); },
+    aiToggleKey: () => { aiUi.showKey = !aiUi.showKey; const i = $('#aiKeyInput'); if (i) i.type = aiUi.showKey ? 'text' : 'password'; const b = $('[data-action=aiToggleKey]'); if (b) b.textContent = aiUi.showKey ? '隠す' : '表示'; },
+    aiTest: () => aiTest(),
+    aiDeleteKey: async () => {
+      if (!(await confirmDialog('この端末に保存した Gemini APIキーを削除します。', '削除する', true))) return;
+      ai.key = ''; saveAi(); aiUi.showKey = false; rerender(); toast('APIキーを削除しました');
     },
     syncDisconnect: async () => {
       if (!(await confirmDialog('この端末の GitHub 接続を解除し、トークンを削除します（GitHub 上のデータとこの端末のデータは残ります）。', '解除する', true))) return;
@@ -1797,6 +2325,7 @@
     fn(el.dataset, el, e);
   });
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && e.target.matches('form[data-form=aiChat] textarea') && window.matchMedia('(pointer: fine)').matches) { e.preventDefault(); e.target.form.requestSubmit(); return; }
     if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role=button][data-action]')) { e.preventDefault(); e.target.click(); }
   });
   document.addEventListener('change', (e) => {
@@ -1815,6 +2344,9 @@
         state.items.forEach((i) => { if (i.category === old) { i.category = v; touch(i); } });
         save(); toast('カテゴリ名を変更しました'); break;
       }
+      case 'journalPhoto': if (el.files && el.files.length) startPhotoQueue(el.files); break;
+      case 'obsidianFiles': if (el.files && el.files.length) importObsidianFiles(el.files); break;
+      case 'aiShare': ai.share = el.checked; saveAi(); toast(ai.share ? 'タスクとジャーナルの要約を共有します' : 'データを共有せずに相談します'); rerender(); break;
       case 'syncAuto': sync.auto = el.checked; saveSync(); if (sync.auto) syncNow(); setSyncState(syncState); toast(sync.auto ? '自動同期をオンにしました' : '自動同期をオフにしました'); break;
       default: break;
     }
@@ -1824,6 +2356,7 @@
     if (!el) return;
     if (el.dataset.input === 'search') { ui.searchQuery = el.value; $('#searchResults').innerHTML = searchResults(el.value); }
     if (el.dataset.input === 'journalSearch') { ui.journalQuery = el.value; $('#journalList').innerHTML = journalList(el.value); }
+    if (el.dataset.input === 'aiDraft') { aiUi.draft = el.value; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 160) + 'px'; }
     if (el.dataset.input === 'linkFilter') { const q = el.value.trim().toLowerCase(); $$('.link-opt', modalBox).forEach((o) => { o.hidden = !!q && !o.dataset.title.includes(q); }); }
   });
   document.addEventListener('submit', (e) => {
@@ -1837,6 +2370,14 @@
       case 'lesson': submitLesson(f); break;
       case 'journal': submitJournal(f); break;
       case 'syncSetup': testConnection(f); break;
+      case 'photoJournal': submitPhotoJournal(f); break;
+      case 'obsidianPaste': submitObsidianPaste(f); break;
+      case 'aiChat': { const t = String(fd.get('text') || ''); if (t.trim()) aiSend(t); break; }
+      case 'aiSetup': {
+        const k = String(fd.get('key') || '').trim(); const model = String(fd.get('model') || AI_DEFAULT_MODEL);
+        if (k) ai.key = k; ai.model = AI_MODELS[model] ? model : AI_DEFAULT_MODEL; saveAi(); rerender();
+        toast(k ? '保存しました（この端末だけに保存）' : 'モデルを保存しました'); break;
+      }
       case 'capture': {
         const t = String(fd.get('title') || '').trim();
         if (!t) return;
@@ -1906,6 +2447,7 @@
     const t = state.settings.theme;
     if (t === 'auto') document.documentElement.removeAttribute('data-theme');
     else document.documentElement.setAttribute('data-theme', t);
+    document.documentElement.setAttribute('data-bg', state.settings.bg || 'mist');
   }
   window.addEventListener('storage', (e) => { if (e.key === STORE_KEY) { state = load(); applyTheme(); rerenderSoft(); } });
 
@@ -1940,5 +2482,5 @@
   if (sync.connected && sync.auto) syncNow();
 
   // テスト・デバッグ用（読み取りのみ）
-  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, parseStepLines, extractJson, syncNow: () => syncNow() };
+  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, syncNow: () => syncNow() };
 })();

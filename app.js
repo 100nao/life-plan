@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.2.2';
+  const APP_VERSION = '1.2.3';
   const DEFAULT_CATEGORIES = ['旅行', '仕事/キャリア', '健康', '家族', '趣味', '学び', 'お金', 'その他'];
   const IMPORTANCE = { high: '高', mid: '中', low: '低' };
   const IMPORTANCE_ORDER = { high: 0, mid: 1, low: 2 };
@@ -1797,7 +1797,7 @@
     if (!key) throw new Error('APIキーが設定されていません。設定の「AI連携（Gemini）」で登録してください。');
     if (/[^\x21-\x7E]/.test(key) || /[…]/.test(key)) throw new Error('APIキーに使えない文字（「…」や全角文字など）が含まれています。Google AI Studio のコピーボタンでキーをコピーし直して貼り付けてください。');
     if (!navigator.onLine) throw new Error('オフラインです。インターネットに接続してから送信してください。');
-    const body = { contents, generationConfig: { maxOutputTokens: opts.maxTokens || 4096 } };
+    const body = { contents, generationConfig: { maxOutputTokens: opts.maxTokens || 8192 } };
     if (opts.json) body.generationConfig.responseMimeType = 'application/json';
     if (opts.system) body.systemInstruction = { parts: [{ text: opts.system }] };
     const tryModels = [model, ...AI_FALLBACKS.filter((m) => m !== model)];
@@ -1813,8 +1813,10 @@
     }
     if (!res.ok) throw new Error(aiErrorMessage(res.status, j));
     const cand = j && Array.isArray(j.candidates) ? j.candidates[0] : null;
-    const text = cand && cand.content && Array.isArray(cand.content.parts) ? cand.content.parts.map((p) => p.text || '').join('').trim() : '';
+    const text = cand && cand.content && Array.isArray(cand.content.parts) ? cand.content.parts.filter((p) => !p.thought).map((p) => p.text || '').join('').trim() : '';
+    if (!text && opts.allowEmpty) return '';
     if (!text) {
+      if (cand && cand.finishReason === 'MAX_TOKENS') throw new Error('回答が長くなりすぎて途中で止まりました。質問を短くしてもう一度お試しください。');
       const block = (j && j.promptFeedback && j.promptFeedback.blockReason) || (cand && cand.finishReason);
       throw new Error(block === 'SAFETY' || (block && /SAFETY|BLOCK/.test(block)) ? '安全上の理由で回答が止められました。言い方を変えてもう一度お試しください。' : '回答が空でした。もう一度お試しください。');
     }
@@ -1921,7 +1923,7 @@
     if (!key) { msg.textContent = 'APIキーを貼り付けてください'; return; }
     btn.disabled = true; msg.textContent = '接続を確認しています…';
     try {
-      await callGemini([{ role: 'user', parts: [{ text: '接続テストです。「OK」とだけ返してください。' }] }], { key, model, maxTokens: 20 });
+      await callGemini([{ role: 'user', parts: [{ text: '接続テストです。「OK」とだけ返してください。' }] }], { key, model, maxTokens: 1024, allowEmpty: true });
       ai.key = key; ai.model = model; saveAi();
       msg.textContent = '✓ 接続できました（キーを保存しました）';
       toast('Gemini と接続できました ✓');

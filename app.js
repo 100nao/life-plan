@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.2.3';
+  const APP_VERSION = '1.2.4';
   const DEFAULT_CATEGORIES = ['旅行', '仕事/キャリア', '健康', '家族', '趣味', '学び', 'お金', 'その他'];
   const IMPORTANCE = { high: '高', mid: '中', low: '低' };
   const IMPORTANCE_ORDER = { high: 0, mid: 1, low: 2 };
@@ -1803,9 +1803,16 @@
     const tryModels = [model, ...AI_FALLBACKS.filter((m) => m !== model)];
     let res, j = null;
     for (let i = 0; i < tryModels.length; i++) {
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const tmr = ctrl ? setTimeout(() => ctrl.abort(), opts.timeoutMs || 90000) : null;
       try {
-        res = await fetch(AI_ENDPOINT(tryModels[i]), { method: 'POST', cache: 'no-store', referrerPolicy: 'no-referrer', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(body) });
-      } catch (e) { throw new Error('Gemini に接続できません。オフラインか、通信が不安定なようです。'); }
+        res = await fetch(AI_ENDPOINT(tryModels[i]), { method: 'POST', cache: 'no-store', referrerPolicy: 'no-referrer', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(body), signal: ctrl ? ctrl.signal : undefined });
+      } catch (e) {
+        if (tmr) clearTimeout(tmr);
+        if (e && e.name === 'AbortError') throw new Error('Gemini からの返事が時間内に届きませんでした。通信状況を確認して、少し待ってからもう一度お試しください。');
+        throw new Error('Gemini に接続できません。オフラインか、通信が不安定なようです。');
+      }
+      if (tmr) clearTimeout(tmr);
       j = null; try { j = await res.json(); } catch (e) { j = null; }
       if (res.status === 404 && i < tryModels.length - 1) continue; // モデルが使えない → 次の候補へ自動で切り替え
       if (res.ok && tryModels[i] !== ai.model && AI_MODELS[tryModels[i]] && !opts.key) { ai.model = tryModels[i]; try { saveAi(); } catch (e) {} }
@@ -1923,7 +1930,7 @@
     if (!key) { msg.textContent = 'APIキーを貼り付けてください'; return; }
     btn.disabled = true; msg.textContent = '接続を確認しています…';
     try {
-      await callGemini([{ role: 'user', parts: [{ text: '接続テストです。「OK」とだけ返してください。' }] }], { key, model, maxTokens: 1024, allowEmpty: true });
+      await callGemini([{ role: 'user', parts: [{ text: '接続テストです。「OK」とだけ返してください。' }] }], { key, model, maxTokens: 256, allowEmpty: true, timeoutMs: 25000 });
       ai.key = key; ai.model = model; saveAi();
       msg.textContent = '✓ 接続できました（キーを保存しました）';
       toast('Gemini と接続できました ✓');

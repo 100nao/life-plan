@@ -1,7 +1,7 @@
 /* ライフプラン Service Worker — アプリ本体をキャッシュしてオフラインで動かす。
    ユーザーデータ・APIキー・AIとの会話は localStorage にのみ保存され、ここでは一切扱わない。
    アプリを更新したら CACHE_VERSION を上げること。 */
-const CACHE_VERSION = 'lifeplan-v1.2.3';
+const CACHE_VERSION = 'lifeplan-v1.2.4';
 const ASSETS = [
   './',
   './index.html',
@@ -43,41 +43,33 @@ self.addEventListener('message', (event) => {
   if (event.data === 'skipWaiting') self.skipWaiting();
 });
 
-// キャッシュ優先 + 裏で更新（stale-while-revalidate）
+// HTML / JS / CSS はネットワーク優先（更新がすぐ反映される）。オフライン時だけキャッシュを使う。
+// 画像などはキャッシュ優先。
 self.addEventListener('fetch', (event) => {
   const req = event.request;
-  // POST（Gemini API など）と外部ドメイン（api.github.com / generativelanguage.googleapis.com）は
-  // 一切キャッシュせず、そのままネットワークへ。
+  // POST（Gemini API など）と外部ドメインは一切キャッシュせず、そのままネットワークへ。
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  if (req.mode === 'navigate') {
+  const isNav = req.mode === 'navigate';
+  const isCode = isNav || /\.(js|css|webmanifest)$/.test(url.pathname) || url.pathname.endsWith('/');
+  const cacheKey = isNav ? './index.html' : req;
+
+  if (isCode) {
     event.respondWith(
-      caches.match('./index.html').then((cached) => {
-        const net = fetch(req).then((res) => {
-          if (res && res.ok) {
-            const copy = res.clone();
-            caches.open(CACHE_VERSION).then((c) => c.put('./index.html', copy));
-          }
-          return res;
-        }).catch(() => cached);
-        return cached || net;
-      })
+      fetch(req, { cache: 'no-store' }).then((res) => {
+        if (res && res.ok) { const copy = res.clone(); caches.open(CACHE_VERSION).then((c) => c.put(cacheKey, copy)); }
+        return res;
+      }).catch(() => caches.match(cacheKey, { ignoreSearch: true }))
     );
     return;
   }
 
   event.respondWith(
-    caches.match(req, { ignoreSearch: true }).then((cached) => {
-      const net = fetch(req).then((res) => {
-        if (res && res.ok) {
-          const copy = res.clone();
-          caches.open(CACHE_VERSION).then((c) => c.put(req, copy));
-        }
-        return res;
-      }).catch(() => cached);
-      return cached || net;
-    })
+    caches.match(req, { ignoreSearch: true }).then((cached) => cached || fetch(req).then((res) => {
+      if (res && res.ok) { const copy = res.clone(); caches.open(CACHE_VERSION).then((c) => c.put(req, copy)); }
+      return res;
+    }))
   );
 });

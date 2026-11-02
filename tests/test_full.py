@@ -778,7 +778,7 @@ with sync_playwright() as p:
     def dd(n): return (TD - datetime.timedelta(days=n)).isoformat()
     def pomu(done, start, today=None):
         return pg.evaluate("([d, s, t]) => LifePlan.pomu({id: 'x', name: 't', startDate: s, done: d}, t)", [done, start, today or TD.isoformat()])
-    check('バージョン 1.8.3', S(pg, 'LifePlan.version') == '1.8.3')
+    check('バージョン 1.8.4', S(pg, 'LifePlan.version') == '1.8.4')
     check('習慣：state.habits が配列', S(pg, 'Array.isArray(LifePlan.state.habits)'))
     # ぽむのルール
     r = pomu([], dd(0)); check('ぽむ：0日はたまご（stage-1）', r['key'] == 'stage-1' and r['lv'] == 1, r)
@@ -1065,7 +1065,7 @@ with sync_playwright() as p:
     db = pg.locator('#drawer').bounding_box()
     check('スワイプ：右から左へなぞるとメニューが開く', is_open() and pg.is_visible('#drawerBackdrop'))
     check('スワイプ：メニューは右側から出る', db and abs(db['x'] + db['width'] - 390) <= 2 and db['x'] > 30, db)
-    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.8.3' in pg.inner_text('#drawer [data-action=forceUpdate]'))
+    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.8.4' in pg.inner_text('#drawer [data-action=forceUpdate]'))
     shot(pg, 'v131_menu.png')
     swipe(90, 500, 330, 505)
     check('スワイプ：左から右へで閉じる', not is_open())
@@ -1771,6 +1771,53 @@ with sync_playwright() as p:
     pg.click('[data-action=gtabView][data-v=month]'); wait_idle(pg, 400)
     pg.click('[data-action=gtabNav][data-dir="0"]'); wait_idle(pg, 400)
     shot(pg, 'v180_calendar.png')
+    # ── v1.8.4：月表示の色分け（カレンダー色の tint＋濃い文字／時間指定は細い1行／色なしカレンダーはパレット割当）──
+    pg.click('[data-action=gtabNav][data-dir="0"]'); wait_idle(pg, 400)
+    chipinfo = pg.evaluate(f"""() => [...document.querySelectorAll('.gtab-cell[data-date="{TD.isoformat()}"] .gtab-chip')].map(c => ({{ cls: c.className, evc: c.style.getPropertyValue('--evc').trim(), text: c.textContent }}))""")
+    band_evc = sorted(c['evc'] for c in chipinfo if 'band' in c['cls'])
+    check('v1.8.4：月表示の終日チップは帯（band）でカレンダーごとの色（仕事=#8e24aa／購読=#e67c73）', band_evc == ['#8e24aa', '#e67c73'], chipinfo)
+    timed_today = [c for c in chipinfo if 'timed' in c['cls']]
+    check('v1.8.4：月表示の時間指定チップは細い1行（ドット＋時刻＋タイトル）で仕事色', len(timed_today) == 1 and timed_today[0]['evc'] == '#8e24aa' and '10:00' in timed_today[0]['text'] and '仕事の会議' in timed_today[0]['text'], chipinfo)
+    cell2b = pg.evaluate(f"""() => [...document.querySelectorAll('.gtab-cell[data-date="{tdp(2)}"] .gtab-chip')].map(c => ({{ cls: c.className, evc: c.style.getPropertyValue('--evc').trim(), text: c.textContent }}))""")
+    check('v1.8.4：別カレンダー（メイン=#039be5）のチップは色が異なる', len(cell2b) == 3 and all(c['evc'] == '#039be5' and 'timed' in c['cls'] for c in cell2b), cell2b)
+    bandcs = pg.eval_on_selector(f'.gtab-cell[data-date="{TD.isoformat()}"] .gtab-chip.band', 'e => { const s = getComputedStyle(e); return { bg: s.backgroundColor, col: s.color, bl: s.borderLeftColor }; }')
+    check('v1.8.4：帯チップはベタ塗りでない（tint背景・白文字でない・左バーはカレンダー色）', bandcs['bg'] not in ('rgb(142, 36, 170)', 'rgb(230, 124, 115)') and bandcs['col'] != 'rgb(255, 255, 255)' and bandcs['bl'] in ('rgb(142, 36, 170)', 'rgb(230, 124, 115)'), bandcs)
+    timedcs = pg.eval_on_selector(f'.gtab-cell[data-date="{TD.isoformat()}"] .gtab-chip.timed', 'e => { const s = getComputedStyle(e); return { bg: s.backgroundColor, dot: getComputedStyle(e.querySelector(".gtab-cdot")).backgroundColor }; }')
+    check('v1.8.4：細いチップは背景なし＋色ドットがカレンダー色（仕事=#8e24aa）', timedcs['bg'] == 'rgba(0, 0, 0, 0)' and timedcs['dot'] == 'rgb(142, 36, 170)', timedcs)
+    # 週表示のタイムグリッドも同じ色ルール（tint＋左バー）
+    pg.click('[data-action=gtabView][data-v=week]'); wait_idle(pg, 500)
+    tgcs = pg.eval_on_selector('.gtab-tgev[data-eid="wev_1"]', 'e => { const s = getComputedStyle(e); return { style: e.getAttribute("style"), bg: s.backgroundColor, col: s.color, bl: s.borderLeftColor }; }')
+    check('v1.8.4：週表示の時間ブロックも tint＋左バー（ベタ塗りでない）', '--evc:#8e24aa' in tgcs['style'] and tgcs['bg'] != 'rgb(142, 36, 170)' and tgcs['col'] != 'rgb(255, 255, 255)' and tgcs['bl'] == 'rgb(142, 36, 170)', tgcs)
+    adcs = pg.eval_on_selector('.gtab-tg-ad[data-eid="aday_1"]', 'e => { const s = getComputedStyle(e); return { style: e.getAttribute("style"), bg: s.backgroundColor, col: s.color }; }')
+    check('v1.8.4：週表示の終日の帯も tint（ベタ塗りでない）', '--evc:#8e24aa' in adcs['style'] and adcs['bg'] != 'rgb(142, 36, 170)' and adcs['col'] != 'rgb(255, 255, 255)', adcs)
+    # タイトルは1行省略せず折り返す（長いタイトルの2時間ブロックで複数行になること）
+    gcal_fake.events['wrap_1'] = {'id': 'wrap_1', 'calendarId': 'work', 'summary': '週ビュー折り返し確認のための長い会議タイトルです', 'start': {'dateTime': f'{TD.isoformat()}T13:00:00+09:00'}, 'end': {'dateTime': f'{TD.isoformat()}T15:00:00+09:00'}}
+    pg.evaluate('LifePlan.pullCalendar(true)'); wait_js(pg, "LifePlan.calendar.calendar.events.some(e => e.id === 'wrap_1')", 8000); wait_idle(pg, 500)
+    wrap = pg.eval_on_selector('.gtab-tgev[data-eid="wrap_1"]', 'e => { const b = e.querySelector("b"); const s = getComputedStyle(b); const es = getComputedStyle(e); return { ws: s.whiteSpace, to: s.textOverflow, lines: Math.round(b.scrollHeight / parseFloat(s.lineHeight)), col: es.color, fs: es.fontSize }; }')
+    check('v1.8.4：週表示のタイトルは省略（ellipsis）でなく折り返し（複数行）・文字は濃色', wrap['ws'] == 'normal' and wrap['lines'] >= 2 and wrap['col'] != 'rgb(255, 255, 255)', wrap)
+    pg.click('[data-action=gtabView][data-v=month]'); wait_idle(pg, 500)
+    # 色情報が無いカレンダー（ICS購読想定）はパレットから色が割り当てられ、凡例と一致する
+    gcal_fake.calendars.append({'id': 'icscal', 'summary': 'ICS購読', 'accessRole': 'reader', 'selected': True})
+    gcal_fake.events['ics_1'] = {'id': 'ics_1', 'calendarId': 'icscal', 'summary': 'ICSの予定', 'start': {'date': tdp(4)}, 'end': {'date': tdp(5)}}
+    pg.evaluate('LifePlan.pullCalendar(true)'); wait_js(pg, "LifePlan.calendar.calendar.events.some(e => e.id === 'ics_1')", 8000); wait_idle(pg, 400)
+    ics = pg.evaluate(f"""() => {{ const chip = document.querySelector('.gtab-cell[data-date="{tdp(4)}"] .gtab-chip.band');
+      const cal = [...document.querySelectorAll('.gtab-cal')].find(x => x.textContent.includes('ICS購読'));
+      return {{ evc: chip ? chip.style.getPropertyValue('--evc').trim() : '', text: chip ? chip.textContent : '',
+        bar: chip ? getComputedStyle(chip).borderLeftColor : '', legend: cal ? getComputedStyle(cal.querySelector('i')).backgroundColor : '' }}; }}""")
+    check('v1.8.4：色なしカレンダーにも色が割り当てられ帯で出る', bool(re.fullmatch(r'#[0-9a-f]{6}', ics['evc'])) and ics['evc'] in ['#5b8def', '#66a182', '#b08968', '#7986cb', '#9575cd', '#4db6ac', '#90a4ae', '#a3b18a'] and 'ICSの予定' in ics['text'], ics)
+    check('v1.8.4：割当色は凡例の色と一致する', ics['bar'] != '' and ics['bar'] == ics['legend'], ics)
+    # 見出し行が上部バーの下に半分隠れた状態で週表示へ切り替えると、行全体が見える位置に戻る
+    pg.evaluate("""() => { const nav = document.querySelector('.gtab-nav'); const tb = document.querySelector('.topbar');
+      const nr = nav.getBoundingClientRect(), tr = tb.getBoundingClientRect();
+      window.scrollBy(0, (nr.top - tr.bottom) + nr.height / 2); }""")
+    wait_idle(pg, 300)
+    tucked = pg.evaluate("""() => { const nr = document.querySelector('.gtab-nav').getBoundingClientRect(), tr = document.querySelector('.topbar').getBoundingClientRect(); return nr.top < tr.bottom && nr.bottom > tr.bottom; }""")
+    check('v1.8.4：前提（見出し行が半分隠れた状態を作れる）', tucked)
+    pg.click('[data-action=gtabView][data-v=week]'); wait_idle(pg, 600)
+    navgeo = pg.evaluate("""() => { const nr = document.querySelector('.gtab-nav').getBoundingClientRect(), tr = document.querySelector('.topbar').getBoundingClientRect(); return { top: nr.top, tbBottom: tr.bottom, week: !!document.querySelector('.gtab-tg.week') }; }""")
+    check('v1.8.4：週表示への切替後は見出し行が上部バーに隠れず全部見える', navgeo['week'] and navgeo['top'] >= navgeo['tbBottom'] - 1, navgeo)
+    pg.click('[data-action=gtabView][data-v=month]'); wait_idle(pg, 400)
+    shot(pg, 'v184_calendar.png')
     pg.evaluate("localStorage.removeItem('lifeplan.gcal')")
     # ── v1.7.0：TASK画面（全件表示・折りたたみ）とナビ再編 ──
     tc = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2, locale='ja-JP', timezone_id='Asia/Tokyo', service_workers='block')
@@ -2102,7 +2149,7 @@ with sync_playwright() as p:
     nav = sp.evaluate("performance.getEntriesByType('navigation')[0].name")
     check('アップデート：?v=<時刻> で読み込み直す', re.search(r'[?&]v=\d{10,}', nav) is not None and sp.evaluate('window.__beforeUpdate') is None, nav)
     check('アップデート：古いキャッシュを削除', 'lifeplan-old-test' not in sp.evaluate('caches.keys()'))
-    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.8.3' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
+    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.8.4' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
     check('アップデート：Service Worker は引き続き有効', sp.evaluate("navigator.serviceWorker.getRegistration().then(r => !!(r && r.active))"))
     swc.set_offline(True)
     sp.reload(); wait_idle(sp, 1200)

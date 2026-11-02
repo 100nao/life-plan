@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.8.3';
+  const APP_VERSION = '1.8.4';
   // カテゴリは「プライベート」「仕事」の2択に固定（v1.8.0）。読み込み時に normCategory で寄せる
   const CATEGORIES = ['プライベート', '仕事'];
   const DEFAULT_CATEGORIES = CATEGORIES;

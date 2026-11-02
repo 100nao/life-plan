@@ -1486,7 +1486,7 @@
         const j = await res.json();
         (j.items || []).forEach((c) => {
           if (!c || !c.id || c.deleted) return;
-          out.push({ id: String(c.id), summary: String(c.summaryOverride || c.summary || c.id), color: String(c.backgroundColor || '#4285f4'), accessRole: String(c.accessRole || 'reader'), primary: !!c.primary, selected: c.selected !== false });
+          out.push({ id: String(c.id), summary: String(c.summaryOverride || c.summary || c.id), color: String(c.backgroundColor || ''), accessRole: String(c.accessRole || 'reader'), primary: !!c.primary, selected: c.selected !== false }); // v1.8.4：色が無いカレンダーは '' のまま保持し、表示時に gevCalColor がパレットから割り当てる
         });
         pageToken = j.nextPageToken || '';
         if (!pageToken) break;
@@ -1781,10 +1781,24 @@
     return en && en !== s ? `${s}–${en}` : s;
   }
   const gevSort = (a, b) => (a.allDay === b.allDay ? String(a.start).localeCompare(String(b.start)) : a.allDay ? -1 : 1);
+  // v1.8.4：チップの色はカレンダーごとに決める。予定に付いた色（取得時にカレンダーの
+  // backgroundColor を写したもの）→ カレンダー一覧の色 の順で解決し、どちらも無い
+  // カレンダー（ICS購読など色情報が無いもの）は ID のハッシュで落ち着いたパレットから割り当てる。
+  // 描画側はこの色を CSS 変数 --evc として渡し、背景はその tint・文字は濃淡を付けた色にする（styles.css）。
+  const GEV_PALETTE = ['#5b8def', '#66a182', '#b08968', '#7986cb', '#9575cd', '#4db6ac', '#90a4ae', '#a3b18a'];
+  const gevHexOk = (s) => /^#[0-9a-fA-F]{6}$/.test(String(s || ''));
+  function gevCalColor(cid) {
+    const cm = gcalCalendarById(cid);
+    if (cm && gevHexOk(cm.color)) return cm.color;
+    const key = String(cid || 'primary');
+    let h = 0; for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+    return GEV_PALETTE[h % GEV_PALETTE.length];
+  }
+  const gevColor = (e) => (e && gevHexOk(e.color) ? e.color : gevCalColor(e && e.calendarId));
   function gtabDayListHtml(day, evs) {
     const list = evs.filter((e) => gevOnDay(e, day)).sort(gevSort);
     if (!list.length) return '<p class="muted small">この日の予定はありません</p>';
-    return `<ul class="plain-list">${list.map((e) => { const cm = gcalCalendarById(e.calendarId); const ro = !gcalWritableCal(cm); return `<li><button type="button" class="gtab-ev" data-action="gevOpen" data-cid="${esc(e.calendarId)}" data-eid="${esc(e.id)}"><span class="gtab-dot" style="background:${esc(e.color || (cm && cm.color) || '#4285f4')}"></span><span class="gtab-time">${esc(gevTimeLabel(e))}</span><span class="grow"><b>${esc(trunc(e.title, 40))}</b><span class="muted small"> ${esc(cm ? cm.summary : '')}${e.location ? '・' + esc(trunc(e.location, 20)) : ''}</span></span>${ro ? '<span class="chip">閲覧のみ</span>' : ''}</button></li>`; }).join('')}</ul>`;
+    return `<ul class="plain-list">${list.map((e) => { const cm = gcalCalendarById(e.calendarId); const ro = !gcalWritableCal(cm); return `<li><button type="button" class="gtab-ev" data-action="gevOpen" data-cid="${esc(e.calendarId)}" data-eid="${esc(e.id)}"><span class="gtab-dot" style="background:${esc(gevColor(e))}"></span><span class="gtab-time">${esc(gevTimeLabel(e))}</span><span class="grow"><b>${esc(trunc(e.title, 40))}</b><span class="muted small"> ${esc(cm ? cm.summary : '')}${e.location ? '・' + esc(trunc(e.location, 20)) : ''}</span></span>${ro ? '<span class="chip">閲覧のみ</span>' : ''}</button></li>`; }).join('')}</ul>`;
   }
   // ── 週・日表示のタイムグリッド（v1.8.1：Google カレンダーの週表示と同じ時間軸形式）──
   // 週＝7列・日＝1列で描画を共用する。上に曜日・日付ヘッダー（今日は丸くハイライト）と終日の帯、
@@ -1817,9 +1831,8 @@
     timed.forEach((it) => { if (cluster.length && it.s >= clusterEnd) flush(); cluster.push(it); clusterEnd = Math.max(clusterEnd, it.en); });
     flush();
     return placed.map(({ e, s, en, col, cols }) => {
-      const cm = gcalCalendarById(e.calendarId);
       const top = (s / 60) * TG_H, h = Math.max(16, ((en - s) / 60) * TG_H - 2);
-      return `<button type="button" class="gtab-tgev" data-action="gevOpen" data-cid="${esc(e.calendarId)}" data-eid="${esc(e.id)}" style="top:${top}px;height:${h}px;left:${(col * 100) / cols}%;width:${100 / cols}%;background:${esc(e.color || (cm && cm.color) || '#4285f4')}" aria-label="${esc(e.title)} ${esc(gevTimeLabel(e))}"><b>${esc(e.title)}</b><span>${esc(gevTimeLabel(e))}</span></button>`;
+      return `<button type="button" class="gtab-tgev" data-action="gevOpen" data-cid="${esc(e.calendarId)}" data-eid="${esc(e.id)}" style="top:${top}px;height:${h}px;left:${(col * 100) / cols}%;width:${100 / cols}%;--evc:${esc(gevColor(e))}" aria-label="${esc(e.title)} ${esc(gevTimeLabel(e))}"><b>${esc(e.title)}</b><span>${esc(gevTimeLabel(e))}</span></button>`;
     }).join('');
   }
   function gtabTimeGridHtml(days, evs) {
@@ -1834,7 +1847,7 @@
     }).join('');
     const ads = days.map((ds) => {
       const list = evs.filter((e) => e.allDay && gevOnDay(e, ds)).sort(gevSort);
-      return `<div class="gtab-tg-adcol">${list.map((e) => { const cm = gcalCalendarById(e.calendarId); return `<button type="button" class="gtab-tg-ad" data-action="gevOpen" data-cid="${esc(e.calendarId)}" data-eid="${esc(e.id)}" style="background:${esc(e.color || (cm && cm.color) || '#4285f4')}">${esc(trunc(e.title, n > 1 ? 10 : 30))}</button>`; }).join('')}</div>`;
+      return `<div class="gtab-tg-adcol">${list.map((e) => `<button type="button" class="gtab-tg-ad" data-action="gevOpen" data-cid="${esc(e.calendarId)}" data-eid="${esc(e.id)}" style="--evc:${esc(gevColor(e))}">${esc(trunc(e.title, n > 1 ? 10 : 30))}</button>`).join('')}</div>`;
     }).join('');
     const hours = Array.from({ length: 24 }, (_, h) => `<span class="gtab-tg-hour" style="top:${h * TG_H + 2}px">${h}:00</span>`).join('');
     const now = new Date(); const nowTop = ((now.getHours() * 60 + now.getMinutes()) / 60) * TG_H;
@@ -1848,7 +1861,18 @@
   // タイムグリッドの初期スクロール：表示期間が変わったときは 8時付近（今日を含む表示では現在時刻付近）へ。
   // render()（p4）からカレンダー表示のたびに呼ばれる。再描画でスクロール要素が差し替わっても、
   // 同じ期間なら直前のスクロール位置（下のリスナーが記録）を復元し、ユーザーのスクロールを邪魔しない
+  // v1.8.4：見出し行（期間タイトル＋前後ボタン）が sticky な上部バーの下に「半分だけ」
+  // 隠れた状態で再描画されると、そのままでは操作しづらい。半分隠れのときだけ行全体が
+  // 見える位置まで少し戻す（大きくスクロールして見出しが完全に上にあるときは触らない）。
+  function ensureGtabNavVisible() {
+    const nav = document.querySelector('.gtab-nav');
+    const tb = document.querySelector('.topbar');
+    if (!nav || !tb) return;
+    const nr = nav.getBoundingClientRect(), tr = tb.getBoundingClientRect();
+    if (nr.top < tr.bottom && nr.bottom > tr.bottom + 2) window.scrollBy(0, nr.top - tr.bottom - 4);
+  }
   function positionTgScroll() {
+    ensureGtabNavVisible();
     const sc = document.querySelector('.gtab-tg-scroll');
     if (!sc) return;
     const key = gtab.view + '|' + (gtab.view === 'week' ? mondayOf(gtab.day) : gtab.day);
@@ -1972,11 +1996,16 @@
         const d = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + i);
         const ds = todayStr(d);
         const dayEvs = evs.filter((e) => gevOnDay(e, ds)).sort(gevSort);
-        const chips = dayEvs.slice(0, 3).map((e) => { const cm = gcalCalendarById(e.calendarId); return `<span class="gtab-chip" style="background:${esc(e.color || (cm && cm.color) || '#4285f4')}">${esc(trunc(e.title, 12))}</span>`; }).join('');
+        // v1.8.4：終日・複数日は tint の帯、時間指定は「色ドット＋時刻＋タイトル」の細い1行にする
+        const chips = dayEvs.slice(0, 3).map((e) => {
+          const col = esc(gevColor(e));
+          if (e.allDay) return `<span class="gtab-chip band" style="--evc:${col}">${esc(trunc(e.title, 12))}</span>`;
+          return `<span class="gtab-chip timed" style="--evc:${col}"><i class="gtab-cdot"></i><span class="gtab-ctime">${esc(gevTime(e.start))}</span><span class="gtab-ctitle">${esc(trunc(e.title, 12))}</span></span>`;
+        }).join('');
         const more = dayEvs.length > 3 ? `<span class="gtab-more">他${dayEvs.length - 3}件</span>` : '';
         cells += `<button type="button" class="gtab-cell ${ds.slice(0, 7) !== gtab.month ? 'other' : ''} ${ds === today ? 'today' : ''} ${ds === gtab.day ? 'sel' : ''}" data-action="gtabDay" data-date="${ds}" aria-label="${ds}"><span class="gtab-d">${d.getDate()}</span><span class="gtab-chips">${chips}${more}</span></button>`;
       }
-      const legend = (cal.calendars || []).filter((c) => c.selected).map((c) => `<span class="gtab-cal"><i style="background:${esc(c.color)}"></i>${esc(trunc(c.summary, 14))}</span>`).join('');
+      const legend = (cal.calendars || []).filter((c) => c.selected).map((c) => `<span class="gtab-cal"><i style="background:${esc(gevCalColor(c.id))}"></i>${esc(trunc(c.summary, 14))}</span>`).join('');
       bodyHtml = `<div class="gtab-grid dow">${'月火水木金土日'.split('').map((w) => `<span>${w}</span>`).join('')}</div>
       <div class="gtab-grid">${cells}</div>
       ${legend ? `<div class="gtab-legend">${legend}</div>` : ''}`;

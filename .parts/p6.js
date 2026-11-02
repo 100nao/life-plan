@@ -22,6 +22,7 @@
       const snap = snapshot();
       state.items = state.items.filter((x) => x.id !== d.id);
       markDeleted(d.id);
+      removeTaskCountdown(d.id); // v1.8.3：タスクを消したら期限のカウントダウンも消す
       state.journal.forEach((e) => { if (e.linked.includes(d.id)) { e.linked = e.linked.filter((id) => id !== d.id); e.updatedAt = nowIso(); } });
       save(); closeModal();
       if (route().name === 'item') go('#' + ({ task: 'matrix', inbox: 'inbox', later: 'later', wish: 'wish' }[i.list] || 'habits')); else rerender();
@@ -32,7 +33,7 @@
       const snap = snapshot();
       if (d.list === 'lesson') {
         state.lessons.unshift(normLesson({ name: i.title, notes: i.notes, status: 'considering' }));
-        state.items = state.items.filter((x) => x.id !== i.id); markDeleted(i.id);
+        state.items = state.items.filter((x) => x.id !== i.id); markDeleted(i.id); removeTaskCountdown(i.id); // v1.8.3：項目でなくなるので期限のカウントダウンも消す
       } else { i.list = d.list; touch(i, true); }
       save(); rerender();
       toast(`「${d.list === 'lesson' ? '習い事' : LISTS[d.list]}」に移動しました`, { label: '元に戻す', run: () => restore(snap) });

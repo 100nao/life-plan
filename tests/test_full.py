@@ -778,7 +778,7 @@ with sync_playwright() as p:
     def dd(n): return (TD - datetime.timedelta(days=n)).isoformat()
     def pomu(done, start, today=None):
         return pg.evaluate("([d, s, t]) => LifePlan.pomu({id: 'x', name: 't', startDate: s, done: d}, t)", [done, start, today or TD.isoformat()])
-    check('バージョン 1.8.2', S(pg, 'LifePlan.version') == '1.8.2')
+    check('バージョン 1.8.3', S(pg, 'LifePlan.version') == '1.8.3')
     check('習慣：state.habits が配列', S(pg, 'Array.isArray(LifePlan.state.habits)'))
     # ぽむのルール
     r = pomu([], dd(0)); check('ぽむ：0日はたまご（stage-1）', r['key'] == 'stage-1' and r['lv'] == 1, r)
@@ -1065,7 +1065,7 @@ with sync_playwright() as p:
     db = pg.locator('#drawer').bounding_box()
     check('スワイプ：右から左へなぞるとメニューが開く', is_open() and pg.is_visible('#drawerBackdrop'))
     check('スワイプ：メニューは右側から出る', db and abs(db['x'] + db['width'] - 390) <= 2 and db['x'] > 30, db)
-    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.8.2' in pg.inner_text('#drawer [data-action=forceUpdate]'))
+    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.8.3' in pg.inner_text('#drawer [data-action=forceUpdate]'))
     shot(pg, 'v131_menu.png')
     swipe(90, 500, 330, 505)
     check('スワイプ：左から右へで閉じる', not is_open())
@@ -2009,6 +2009,74 @@ with sync_playwright() as p:
     acc.locator('[data-action=toggleDone]').click(); wait_idle(mp2, 400)
     check('v1.8.2：accessory「完了にする」が効く（ラベルも切り替わる）', S(mp2, "LifePlan.state.items.find(i => i.id === 'm3').status") == 'done' and '未完了に戻す' in mp2.locator('.card.detail .detail-actions [data-action=toggleDone]').inner_text())
     mc2.close()
+    # ── v1.8.3：タスクの期限（〆切日）→ カウントダウン自動反映 ──
+    dc = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2, locale='ja-JP', timezone_id='Asia/Tokyo', service_workers='block')
+    dp = dc.new_page(); dp.on('pageerror', lambda e: errors.append('DUE ' + str(e)))
+    def dd183(n): return (TD + datetime.timedelta(days=n)).isoformat()
+    dseed = {'items': [
+        {'id': 'd_legacy', 'list': 'task', 'title': '既存の目標日タスク', 'category': 'プライベート', 'status': 'todo', 'targetDate': dd183(10), 'createdAt': now, 'updatedAt': now},
+        {'id': 'd_plain', 'list': 'task', 'title': '期限なしタスク', 'category': '仕事', 'status': 'todo', 'createdAt': now, 'updatedAt': now},
+    ], 'countdowns': [
+        {'id': 'd_manual', 'title': '手動カウントダウン', 'emoji': '🎯', 'date': dd183(20), 'memo': '', 'taskId': '', 'gcal': False, 'gcalId': '', 'source': '', 'createdAt': now, 'updatedAt': now},
+    ], 'journal': [], 'habits': [], 'lessons': []}
+    dp.goto(URL); wait_idle(dp, 400)
+    dp.evaluate(f"localStorage.setItem('lifeplan.v1', JSON.stringify({json.dumps(dseed, ensure_ascii=False)}))")
+    dp.reload(); wait_idle(dp, 500)
+    check('v1.8.3：既存の目標日データは targetDate のまま読み込まれる（移行なし）', S(dp, "LifePlan.state.items.find(i => i.id === 'd_legacy').targetDate") == dd183(10))
+    check('v1.8.3：読み込み直後は自動カウントダウンを作らない（手動の1件のみ）', S(dp, 'LifePlan.state.countdowns.length') == 1 and S(dp, "LifePlan.state.countdowns[0].cdTaskId") == '')
+    # 編集フォーム：期限ラベル＋date入力
+    dp.evaluate("location.hash = '#item/d_legacy'"); wait_idle(dp, 400)
+    d10 = TD + datetime.timedelta(days=10)
+    check('v1.8.3：詳細に期限チップ（日付・あとN日）が出る', f'{d10.month}/{d10.day}・あと10日' in (dp.text_content('.card.detail .chips') or ''), dp.text_content('.card.detail .chips'))
+    dp.click('.detail-top [data-action=editItem]'); wait_idle(dp, 400)
+    check('v1.8.3：編集フォームに「期限（〆切日）」の date 入力があり既存値が入る', '期限（〆切日' in dp.inner_text('form[data-form=item]') and dp.get_attribute('form[data-form=item] input[name=targetDate]', 'type') == 'date' and dp.input_value('form[data-form=item] input[name=targetDate]') == dd183(10))
+    check('v1.8.3：編集フォームに「目標の時期」は従来通り残る', dp.locator('form[data-form=item] select[name=timeframe]').count() == 1)
+    # 既存タスクを保存し直すと、その期限でカウントダウンが自動生成される
+    dp.click('form[data-form=item] button[type=submit]'); wait_idle(dp, 400)
+    lcd = S(dp, "LifePlan.state.countdowns.find(c => c.cdTaskId === 'd_legacy')")
+    check('v1.8.3：既存タスクの保存で期限カウントダウンが自動生成（cdTaskId・タイトル・日付・gcal:false）', lcd and lcd['title'] == '既存の目標日タスク' and lcd['date'] == dd183(10) and lcd['taskId'] == 'd_legacy' and lcd['gcal'] is False, lcd)
+    # 編集でタイトルと期限を変更 → 追従（同じID・件数不変）
+    dp.click('.detail-top [data-action=editItem]'); wait_idle(dp, 400)
+    dp.fill('form[data-form=item] input[name=title]', '既存の目標日タスク改')
+    dp.fill('form[data-form=item] input[name=targetDate]', dd183(15))
+    dp.click('form[data-form=item] button[type=submit]'); wait_idle(dp, 400)
+    lcd2 = S(dp, "LifePlan.state.countdowns.find(c => c.cdTaskId === 'd_legacy')")
+    check('v1.8.3：タイトル・期限の変更にカウントダウンが追従（ID不変・重複なし）', lcd2 and lcd2['id'] == lcd['id'] and lcd2['title'] == '既存の目標日タスク改' and lcd2['date'] == dd183(15) and S(dp, "LifePlan.state.countdowns.filter(c => c.cdTaskId === 'd_legacy').length") == 1, lcd2)
+    # カウントダウンタブ：タスク由来カードは案内文つきで編集・削除ボタンなし／手動分は従来通り
+    dp.evaluate("location.hash = '#countdown'"); wait_idle(dp, 400)
+    acard = dp.locator(f'.cd-card[data-cd="{lcd["id"]}"]')
+    check('v1.8.3：カウントダウンタブにタスク由来カードが出て「タスクの期限」の案内・編集/削除ボタンなし', acard.count() == 1 and 'タスクの期限' in acard.inner_text() and acard.locator('[data-action=cdEdit]').count() == 0 and acard.locator('[data-action=cdDelete]').count() == 0)
+    mcard = dp.locator('.cd-card[data-cd="d_manual"]')
+    check('v1.8.3：手動カウントダウンは従来通り編集・削除ボタンあり', mcard.count() == 1 and mcard.locator('[data-action=cdEdit]').count() == 1 and mcard.locator('[data-action=cdDelete]').count() == 1)
+    # 完了 → カウントダウンが消える／未完了に戻す → 出し直す
+    dp.evaluate("location.hash = '#item/d_legacy'"); wait_idle(dp, 400)
+    dp.click('.card.detail .detail-actions [data-action=toggleDone]'); wait_idle(dp, 400)
+    check('v1.8.3：タスク完了でカウントダウンが消える', S(dp, "LifePlan.state.countdowns.some(c => c.cdTaskId === 'd_legacy')") is False and S(dp, f"!!LifePlan.state.deleted['{lcd['id']}']"))
+    dp.click('.card.detail .detail-actions [data-action=toggleDone]'); wait_idle(dp, 400)
+    check('v1.8.3：未完了に戻すとカウントダウンが復活する', S(dp, "LifePlan.state.countdowns.some(c => c.cdTaskId === 'd_legacy')") is True)
+    # 期限をクリア → 消える
+    dp.click('.detail-top [data-action=editItem]'); wait_idle(dp, 400)
+    dp.fill('form[data-form=item] input[name=targetDate]', ''); wait_idle(dp, 150)
+    dp.click('form[data-form=item] button[type=submit]'); wait_idle(dp, 400)
+    check('v1.8.3：期限をクリアするとカウントダウンが消える', S(dp, "LifePlan.state.countdowns.some(c => c.cdTaskId === 'd_legacy')") is False)
+    # クイック追加（作成フォーム）にも期限欄があり、入れて作ると即カウントダウン
+    dp.evaluate("location.hash = '#wish'"); wait_idle(dp, 400)
+    dp.click('[data-action=quickAdd]'); wait_idle(dp, 400)
+    check('v1.8.3：作成フォーム（すばやく追加）に期限の date 入力がある', '期限（〆切日' in dp.inner_text('form[data-form=quickAdd]') and dp.get_attribute('form[data-form=quickAdd] input[name=targetDate]', 'type') == 'date')
+    dp.fill('form[data-form=quickAdd] input[name=title]', '期限つき新規タスク')
+    dp.fill('form[data-form=quickAdd] input[name=targetDate]', dd183(5))
+    dp.click('form[data-form=quickAdd] button[type=submit]'); wait_idle(dp, 400)
+    nitem = S(dp, "LifePlan.state.items.find(i => i.title === '期限つき新規タスク')")
+    ncd = S(dp, f"LifePlan.state.countdowns.find(c => c.cdTaskId === '{nitem['id']}')") if nitem else None
+    check('v1.8.3：作成時に期限を入れると targetDate に保存されカウントダウンもできる', nitem and nitem['targetDate'] == dd183(5) and ncd and ncd['date'] == dd183(5) and ncd['title'] == '期限つき新規タスク', (nitem, ncd))
+    d5 = TD + datetime.timedelta(days=5)
+    check('v1.8.3：TASK一覧に期限チップが出る', f'{d5.month}/{d5.day}・あと5日' in (dp.text_content('.task-row[data-task-row="' + nitem['id'] + '"] .task-row-body .chips') or ''), dp.text_content('.task-row[data-task-row="' + nitem['id'] + '"] .task-row-body .chips'))
+    # タスク削除 → カウントダウンも消える（手動分は残る）
+    dp.evaluate(f"location.hash = '#item/{nitem['id']}'"); wait_idle(dp, 400)
+    dp.click('.detail-top [data-action=editItem]'); wait_idle(dp, 400)
+    dp.click('form[data-form=item] [data-action=deleteItem]'); wait_idle(dp, 400)
+    check('v1.8.3：タスク削除でカウントダウンも消える・手動分は残る', S(dp, f"LifePlan.state.countdowns.some(c => c.cdTaskId === '{nitem['id']}')") is False and S(dp, "LifePlan.state.countdowns.some(c => c.id === 'd_manual')") is True)
+    dc.close()
     # ── PC ──
     state_dump = pg.evaluate("localStorage.getItem('lifeplan.v1')")
     # ── Service Worker・オフライン（別コンテキスト：同期のモックと分けるため）──
@@ -2034,7 +2102,7 @@ with sync_playwright() as p:
     nav = sp.evaluate("performance.getEntriesByType('navigation')[0].name")
     check('アップデート：?v=<時刻> で読み込み直す', re.search(r'[?&]v=\d{10,}', nav) is not None and sp.evaluate('window.__beforeUpdate') is None, nav)
     check('アップデート：古いキャッシュを削除', 'lifeplan-old-test' not in sp.evaluate('caches.keys()'))
-    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.8.2' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
+    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.8.3' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
     check('アップデート：Service Worker は引き続き有効', sp.evaluate("navigator.serviceWorker.getRegistration().then(r => !!(r && r.active))"))
     swc.set_offline(True)
     sp.reload(); wait_idle(sp, 1200)

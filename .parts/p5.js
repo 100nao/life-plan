@@ -491,7 +491,7 @@
     L.push('', `## 進行中・未完了の項目（${act.length}件${act.length > items.length ? `、上位${items.length}件のみ` : ''}）`);
     if (!items.length) L.push('- なし');
     items.forEach((i) => {
-      const meta = [i.quadrant ? `${i.quadrant} ${QUADRANTS[i.quadrant].label}` : '未分類', LISTS[i.list], STATUS[i.status], `重要度${IMPORTANCE[i.importance]}`, i.targetDate ? `目標日${i.targetDate}` : '', i.steps.length ? `ステップ${stepsDone(i)}/${i.steps.length}` : '', isStuck(i) ? `停滞${idleDays(i)}日` : ''].filter(Boolean).join('・');
+      const meta = [i.quadrant ? `${i.quadrant} ${QUADRANTS[i.quadrant].label}` : '未分類', LISTS[i.list], STATUS[i.status], `重要度${IMPORTANCE[i.importance]}`, i.targetDate ? `期限${i.targetDate}` : '', i.steps.length ? `ステップ${stepsDone(i)}/${i.steps.length}` : '', isStuck(i) ? `停滞${idleDays(i)}日` : ''].filter(Boolean).join('・');
       const next = (i.steps.find((s) => !s.done) || {}).text;
       L.push(`- ${trunc(i.title, 40)}［${meta}］${next ? ` 次：${trunc(next, 30)}` : ''}`);
     });
@@ -1740,7 +1740,7 @@
       ${c.memo ? `<p class="cd-memo">${esc(c.memo)}</p>` : ''}
       ${t ? `<a class="cd-link small" href="#item/${t.id}">🔗 ${esc(trunc(t.title, 30))}</a>` : ''}
       ${gs ? `<p class="cd-gcal ${gs.cls} small">${gs.text}</p>` : ''}
-      ${c.readOnly ? '<p class="muted small cd-ro">Googleカレンダーの「⏳」つきの予定（変更は Google カレンダーで）</p>' : `<div class="btn-row end cd-actions"><button class="btn ghost small" data-action="cdEdit" data-id="${c.id}">編集</button><button class="btn ghost small danger" data-action="cdDelete" data-id="${c.id}">削除</button></div>`}
+      ${c.readOnly ? '<p class="muted small cd-ro">Googleカレンダーの「⏳」つきの予定（変更は Google カレンダーで）</p>' : c.cdTaskId ? '<p class="muted small cd-ro">📝 タスクの期限（〆切日）から自動作成（変更はタスクの編集から）</p>' : `<div class="btn-row end cd-actions"><button class="btn ghost small" data-action="cdEdit" data-id="${c.id}">編集</button><button class="btn ghost small danger" data-action="cdDelete" data-id="${c.id}">削除</button></div>`}
     </article>`;
   }
   const fmtStamp = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${pad(d.getMinutes())}`; };
@@ -2106,6 +2106,7 @@
   function cdPreviewText(v) { return isDateStr(v) ? `${fmtDate(v)} ・ ${cdText(daysUntil(v))}` : '日付を選んでください'; }
   function openCountdownEditor(id) {
     const c = id ? getCountdown(id) : null;
+    if (c && c.cdTaskId) { toast('このカウントダウンはタスクの期限と連動しています。変更はタスクの編集から行ってください'); return; } // v1.8.3：タスク由来はタスク側で管理
     const v = c || { emoji: '🎯', title: '', date: '', memo: '', taskId: '', gcal: false, source: '' };
     const items = state.items.filter((i) => i.status !== 'done' || i.id === v.taskId);
     const fromGoogle = v.source === 'google' && v.gcalId;
@@ -2131,6 +2132,7 @@
     if (!title) return;
     if (!isDateStr(date)) { toast('日付を選んでください'); return; }
     const c = getCountdown(form.dataset.id);
+    if (c && c.cdTaskId) { toast('このカウントダウンはタスクの期限と連動しています。変更はタスクの編集から行ってください'); return; } // v1.8.3
     const data = { title, date, emoji: String(fd.get('emoji') || '').trim() || '⏳', memo: String(fd.get('memo') || '').trim(), taskId: String(fd.get('taskId') || '') };
     if (!(c && c.source === 'google' && c.gcalId)) data.gcal = fd.get('gcal') === 'on';
     if (!c && date < todayStr()) { toast('今日以降の日付を選んでください'); return; }
@@ -2159,6 +2161,7 @@
   }
   async function deleteCountdown(id) {
     const c = getCountdown(id); if (!c) return;
+    if (c.cdTaskId) { toast('このカウントダウンはタスクの期限と連動しています。消すにはタスクの期限を外すか、タスクを完了・削除してください'); return; } // v1.8.3
     const snap = snapshot();
     const gid = c.gcal ? cdGcalId(c) : '';
     const fromGoogle = c.source === 'google';

@@ -316,9 +316,10 @@
         <div class="field"><span class="field-label">追加先</span><div class="seg wrap">${dests.map(([k, l]) => `<label class="pill-radio"><input type="radio" name="dest" value="${k}" ${def === k ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div></div>
         <div class="field qa-quad"><span class="field-label">緊急度 × 重要度</span>${quadSelect('quadrant', preset.quadrant || '')}</div>
         <div class="field qa-cat"><span class="field-label">カテゴリ</span><select name="category">${catOptions('プライベート', null)}</select></div>
+        <div class="field qa-due"><span class="field-label">期限（〆切日・任意）</span><input type="date" name="targetDate"><span class="muted small">入れるとカウントダウンにも自動で出ます</span></div>
         <div class="btn-row end"><button type="button" class="btn ghost" data-action="quickAddDetail">詳しく入力</button><button class="btn primary" type="submit">追加</button></div>
       </form>`, { onOpen: (box) => {
-      const upd = () => { const d = $('input[name=dest]:checked', box).value; $('.qa-quad', box).hidden = d === 'lesson'; $('.qa-cat', box).hidden = d === 'lesson' || d === 'inbox'; };
+      const upd = () => { const d = $('input[name=dest]:checked', box).value; $('.qa-quad', box).hidden = d === 'lesson'; $('.qa-cat', box).hidden = d === 'lesson' || d === 'inbox'; $('.qa-due', box).hidden = d === 'lesson'; };
       $$('input[name=dest]', box).forEach((x) => x.addEventListener('change', upd)); upd();
     } });
   }
@@ -333,7 +334,7 @@
       if (detail) openLessonEditor(l.id); else toast('習い事に追加しました');
       return;
     }
-    const it = addItem({ title, list: dest, quadrant: fd.get('quadrant') || '', category: fd.get('category') || '' });
+    const it = addItem({ title, list: dest, quadrant: fd.get('quadrant') || '', category: fd.get('category') || '', targetDate: fd.get('targetDate') || '' });
     closeModal(); rerender();
     if (detail) openItemEditor(it.id);
     else toast(`「${LISTS[dest]}」に追加しました`, { label: '開く', run: () => go('#item/' + it.id) });
@@ -352,7 +353,7 @@
           <label class="field"><span class="field-label">カテゴリ</span><select name="category">${catOptions(i.category, null)}</select></label>
           <label class="field"><span class="field-label">重要度</span><select name="importance">${options(IMPORTANCE, i.importance)}</select></label>
           <label class="field"><span class="field-label">目標の時期</span><select name="timeframe">${options(TIMEFRAME, i.timeframe, '（未設定）')}</select></label>
-          <label class="field"><span class="field-label">目標日（任意）</span><input type="date" name="targetDate" value="${esc(i.targetDate)}"></label>
+          <label class="field"><span class="field-label">期限（〆切日・任意）</span><input type="date" name="targetDate" value="${esc(i.targetDate)}"><span class="muted small">入れるとカウントダウンにも自動で出ます</span></label>
         </div>
         <div class="field"><span class="field-label">緊急度 × 重要度</span>${quadSelect('quadrant', i.quadrant)}</div>
         <div class="field"><span class="field-label">目安時間</span><div class="seg wrap"><label class="pill-radio"><input type="radio" name="estimate" value="" ${!i.estimate ? 'checked' : ''}><span>なし</span></label>${ESTIMATES.map((m) => `<label class="pill-radio"><input type="radio" name="estimate" value="${m}" ${i.estimate === m ? 'checked' : ''}><span>${estLabel(m)}</span></label>`).join('')}</div></div>
@@ -376,6 +377,7 @@
       tags: String(fd.get('tags') || '').split(/[,、]/).map((s) => s.trim()).filter(Boolean),
     });
     touch(i, prevList !== i.list);
+    syncTaskCountdown(i); // v1.8.3：期限・タイトルの変更をカウントダウンへ追従させる
     save(); closeModal(); rerender(); toast('保存しました');
   }
 

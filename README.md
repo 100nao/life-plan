@@ -189,6 +189,11 @@
 - 取得範囲は過去30日〜未来180日（全カレンダー）。アプリを開いたとき・画面に戻ったとき・表示中30秒ごとに取り直すのは従来通りで、カレンダータブを開いたときも古ければ取り直します。カレンダー一覧（calendarList）は10分キャッシュします。表示が取得範囲の外に出たときは、その期間分だけ追加取得します（v1.8.0。追加分は基本範囲の再取得時に整理されます）。
 - カウントダウン／ホーム向けの取得（メインカレンダーの「⏳」予定を2年先まで）も従来通り動きます。予定の重複排除は「カレンダーID＋予定ID」で行います。
 
+### v1.8.3 — タスクの「期限（〆切日）」を明確化し、カウントダウンへ自動反映
+
+- **期限欄を明確に**：タスクの編集フォームの「目標日（任意）」を「期限（〆切日・任意）」に改名し、「すばやく追加」（作成フォーム）にも期限の日付入力を追加しました。保存先は従来の `targetDate` のまま（データ移行なし）で、既存の目標日データがそのまま期限として効きます（TASK の期限フィルター・期限チップ・詳細表示も「期限」表記に統一）。
+- **カウントダウンへ自動反映**：期限があり未完了のタスクには、カウントダウンタブに同名・同日のカウントダウンが自動で現れます（カウントダウン側に `cdTaskId` でリンク。カレンダー由来の `gcalId` と同じ重複防止パターン）。タイトル・期限の変更に追従し、期限を消す／タスクを完了する／タスクを削除するとカウントダウンも消えます（未完了に戻すと出し直します）。タスク由来のカウントダウンはカウントダウン側からは編集・削除できず（案内文を表示）、変更はタスクの編集から行います。手動のカウントダウンとは競合しません。Google カレンダーへは送信しません（`gcal: false` 固定）。
+
 ### v1.8.2 — 詳細カードの accessory 行を復旧／マトリクスの長押しドラッグ（モバイル）／目安時間と進捗%／カテゴリ初期値をプライベートに
 
 - **詳細カード下部の accessory 行を復旧**：アイテム詳細カードの最下部に、操作ボタン列（＋ ステップ追加／編集／✓ 完了にする）を復旧しました。これはカード上部（戻る／編集／象限）やタイトル直下の行とは別のもので、重複ではありません。「ステップ追加」はステップ欄の入力にフォーカスします。
@@ -230,7 +235,7 @@
     "habits": [{ "id": "…", "emoji": "📚", "name": "英語5分", "startDate": "2026-10-24", "done": ["2026-10-24", "2026-10-25"], "missed": ["2026-10-26"], "seen": "stage-2", "unlocked": ["stage-1", "stage-2"], "createdAt": "…", "updatedAt": "…" }],   // v1.3.0〜。done は〇を押した日、missed（v1.3.1〜）は×を押した日（JST の YYYY-MM-DD・done と重ならない）
     "aiAnalyses": [{ "id": "ana:2026-11-02", "date": "2026-11-02", "summary": "…", "insights": ["…"], "suggestionIds": ["…"], "parsed": true, "model": "gemini-…", "runs": 1, "createdAt": "…", "updatedAt": "…" }],   // v1.4.0〜。1日1件（id は ana:日付）
     "aiSuggestions": [{ "id": "…", "title": "…", "quadrant": "q1 | q2 | q3 | q4", "why": "…", "steps": ["…"], "source": "gemini | coach", "ref": "<分析 or コーチメッセージの id>", "date": "2026-11-02", "status": "open | moved | dismissed", "itemId": "<移したタスクの id>", "auto": false, "createdAt": "…", "updatedAt": "…" }],   // v1.4.0〜。自分のタスクとは別
-    "countdowns": [{ "id": "…", "title": "役員発表", "emoji": "🎤", "date": "2027-03-15", "memo": "", "taskId": "<item id or ''>", "gcal": false, "gcalId": "<Google の event id or ''>", "source": "'' | google | apple", "createdAt": "…", "updatedAt": "…" }],   // v1.5.0〜。date は目標日（ローカル日付）。source：'' アプリで作成 / google Googleの予定から（apple は将来用・未使用）
+    "countdowns": [{ "id": "…", "title": "役員発表", "emoji": "🎤", "date": "2027-03-15", "memo": "", "taskId": "<item id or ''>", "gcal": false, "gcalId": "<Google の event id or ''>", "source": "'' | google | apple", "cdTaskId": "<item id or ''>", "createdAt": "…", "updatedAt": "…" }],   // v1.5.0〜。date は目標日（ローカル日付）。source：'' アプリで作成 / google Googleの予定から（apple は将来用・未使用）。cdTaskId は v1.8.3〜：タスクの期限から自動作成された場合のリンク先 item id（手動は ''）
     "gcalDeletes": [{ "id": "gdel:<gcalId>", "gcalId": "…", "countdownId": "…", "title": "…", "date": "…", "reason": "deleted | off", "createdAt": "…", "updatedAt": "…" }],   // v1.5.0〜。v1.6.0 では直接削除に失敗したときだけ残る再試行用の依頼
     "focus": { "2026": "健康の土台をつくる" },
     "deleted": { "<id>": "<削除日時>", "photo:<photo id>": "<削除日時>" }

@@ -119,7 +119,7 @@
   // ───────────────────────── 画面: TASK（v1.7.0 で旧「やりたい事」を全件表示に改名） ─────────────────────────
   // 分類（タスク／やりたい事／後回し／未整理）は問わず出す。状態の既定は未完了のみ（v1.7.1。完了済みは
   // 状態フィルターで「すべて／完了」を選べば見られる）。絞り込みはフィルターで行う。
-  // v1.8.0：分類フィルターは廃止し、期限（目標日）フィルターに置き換えた。未整理の項目も既定表示
+  // v1.8.0：分類フィルターは廃止し、期限（targetDate＝〆切日）フィルターに置き換えた。未整理の項目も既定表示
   // （期限：すべて・未完了のみ）に出るので、そこから届く。行は左スワイプで「削除」ボタンが出る
   // （v1.7.1。実処理は p6 のスワイプ処理＋既存 deleteItem アクション）。
   const DUE_FILTERS = { today: '今日中', week: '今週中', month: '1ヶ月以内', over: '1ヶ月以上' };
@@ -157,7 +157,7 @@
       <select data-change="wishFilter" data-k="imp" aria-label="重要度">${options(IMPORTANCE, w.imp, '重要度: すべて')}</select>
       <select data-change="wishFilter" data-k="tf" aria-label="時期">${options(TIMEFRAME, w.tf, '時期: すべて')}</select>
       <select data-change="wishFilter" data-k="status" aria-label="状態">${opt('all', '状態: すべて', w.status)}${opt('open', '未完了のみ', w.status)}${options(STATUS, w.status)}</select>
-      <select data-change="wishFilter" data-k="sort" aria-label="並び替え">${opt('updated', '並び: 更新順', w.sort)}${opt('created', '並び: 作成順', w.sort)}${opt('importance', '並び: 重要度', w.sort)}${opt('timeframe', '並び: 時期', w.sort)}${opt('date', '並び: 目標日', w.sort)}${opt('title', '並び: 名前', w.sort)}</select>
+      <select data-change="wishFilter" data-k="sort" aria-label="並び替え">${opt('updated', '並び: 更新順', w.sort)}${opt('created', '並び: 作成順', w.sort)}${opt('importance', '並び: 重要度', w.sort)}${opt('timeframe', '並び: 時期', w.sort)}${opt('date', '並び: 期限', w.sort)}${opt('title', '並び: 名前', w.sort)}</select>
     </div>`);
     if (!all.length) {
       out.push(emptyState('タスクはまだありません', 'やるべきこと、行ってみたい場所、挑戦したいこと…。思いついたら「＋」から追加しましょう。',

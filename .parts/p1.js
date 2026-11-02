@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.8.2';
+  const APP_VERSION = '1.8.3';
   // カテゴリは「プライベート」「仕事」の2択に固定（v1.8.0）。読み込み時に normCategory で寄せる
   const CATEGORIES = ['プライベート', '仕事'];
   const DEFAULT_CATEGORIES = CATEGORIES;
@@ -199,8 +199,46 @@
     const t = nowIso();
     const o = { id: String(c.id || uid()), title: String(c.title || '').trim() || '（無題）', emoji: String(c.emoji || '⏳'), date: isDateStr(c.date) ? c.date : todayStr(),
       memo: String(c.memo || ''), taskId: String(c.taskId || ''), gcal: !!c.gcal, gcalId: String(c.gcalId || ''), source: ['google', 'apple'].includes(c.source) ? c.source : '',
+      cdTaskId: String(c.cdTaskId || ''), // v1.8.3：タスクの期限から自動作成された場合のリンク先タスクID（手動のものは空）
       createdAt: c.createdAt || t, updatedAt: c.updatedAt || t };
     return o;
+  }
+  // ── v1.8.3：タスクの期限（targetDate＝〆切日）をカウントダウンへ自動反映する ──
+  // 期限があり未完了のタスクには、cdTaskId でつながったカウントダウンがちょうど1件ある状態を保つ
+  // （タイトル・日付はタスクに追従）。期限を消した／完了した場合は外す。タスク削除時は removeTaskCountdown。
+  // 手動カウントダウン（cdTaskId 空）には一切触れない。保存（save）は呼び出し側が行う。
+  function syncTaskCountdown(item) {
+    if (!item) return;
+    const mine = state.countdowns.filter((c) => c.cdTaskId && c.cdTaskId === item.id);
+    const want = isDateStr(item.targetDate) && item.status !== 'done';
+    if (!want) {
+      if (mine.length) {
+        const ids = new Set(mine.map((c) => c.id));
+        mine.forEach((c) => { state.deleted[c.id] = nowIso(); });
+        state.countdowns = state.countdowns.filter((c) => !ids.has(c.id));
+      }
+      return;
+    }
+    const keep = mine[0];
+    if (keep) {
+      if (mine.length > 1) { // 万一の重複は掃除して1件に寄せる
+        const extra = new Set(mine.slice(1).map((c) => c.id));
+        mine.slice(1).forEach((c) => { state.deleted[c.id] = nowIso(); });
+        state.countdowns = state.countdowns.filter((c) => !extra.has(c.id));
+      }
+      if (keep.title !== item.title || keep.date !== item.targetDate || keep.taskId !== item.id) {
+        keep.title = item.title; keep.date = item.targetDate; keep.taskId = item.id; keep.updatedAt = nowIso();
+      }
+    } else {
+      state.countdowns.push(normCountdown({ title: item.title, date: item.targetDate, emoji: '⏳', taskId: item.id, cdTaskId: item.id }));
+    }
+  }
+  function removeTaskCountdown(itemId) {
+    const mine = state.countdowns.filter((c) => c.cdTaskId && c.cdTaskId === itemId);
+    if (!mine.length) return;
+    const ids = new Set(mine.map((c) => c.id));
+    mine.forEach((c) => { state.deleted[c.id] = nowIso(); });
+    state.countdowns = state.countdowns.filter((c) => !ids.has(c.id));
   }
   // Googleカレンダーから消してほしい予定（コーチが処理して calendar-links.json の deleted に書く）
   function normGcalDelete(g) {
@@ -287,6 +325,7 @@
   function addItem(data) {
     const it = normItem({ ...data, id: uid(), createdAt: nowIso(), updatedAt: nowIso() });
     state.items.unshift(it);
+    syncTaskCountdown(it); // v1.8.3：期限つきで作ったらカウントダウンにも出す
     save();
     return it;
   }
@@ -294,6 +333,7 @@
     it.status = status;
     it.completedAt = status === 'done' ? nowIso() : '';
     touch(it, true);
+    syncTaskCountdown(it); // v1.8.3：完了でカウントダウンを外し、未完了に戻すと期限があれば出し直す
   }
   const monthKey = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
   const sessionsThisMonth = (l) => l.logs.filter((g) => g.date.startsWith(monthKey())).length;

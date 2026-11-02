@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.8.2';
+  const APP_VERSION = '1.8.3';
   // カテゴリは「プライベート」「仕事」の2択に固定（v1.8.0）。読み込み時に normCategory で寄せる
   const CATEGORIES = ['プライベート', '仕事'];
   const DEFAULT_CATEGORIES = CATEGORIES;
@@ -199,8 +199,46 @@
     const t = nowIso();
     const o = { id: String(c.id || uid()), title: String(c.title || '').trim() || '（無題）', emoji: String(c.emoji || '⏳'), date: isDateStr(c.date) ? c.date : todayStr(),
       memo: String(c.memo || ''), taskId: String(c.taskId || ''), gcal: !!c.gcal, gcalId: String(c.gcalId || ''), source: ['google', 'apple'].includes(c.source) ? c.source : '',
+      cdTaskId: String(c.cdTaskId || ''), // v1.8.3：タスクの期限から自動作成された場合のリンク先タスクID（手動のものは空）
       createdAt: c.createdAt || t, updatedAt: c.updatedAt || t };
     return o;
+  }
+  // ── v1.8.3：タスクの期限（targetDate＝〆切日）をカウントダウンへ自動反映する ──
+  // 期限があり未完了のタスクには、cdTaskId でつながったカウントダウンがちょうど1件ある状態を保つ
+  // （タイトル・日付はタスクに追従）。期限を消した／完了した場合は外す。タスク削除時は removeTaskCountdown。
+  // 手動カウントダウン（cdTaskId 空）には一切触れない。保存（save）は呼び出し側が行う。
+  function syncTaskCountdown(item) {
+    if (!item) return;
+    const mine = state.countdowns.filter((c) => c.cdTaskId && c.cdTaskId === item.id);
+    const want = isDateStr(item.targetDate) && item.status !== 'done';
+    if (!want) {
+      if (mine.length) {
+        const ids = new Set(mine.map((c) => c.id));
+        mine.forEach((c) => { state.deleted[c.id] = nowIso(); });
+        state.countdowns = state.countdowns.filter((c) => !ids.has(c.id));
+      }
+      return;
+    }
+    const keep = mine[0];
+    if (keep) {
+      if (mine.length > 1) { // 万一の重複は掃除して1件に寄せる
+        const extra = new Set(mine.slice(1).map((c) => c.id));
+        mine.slice(1).forEach((c) => { state.deleted[c.id] = nowIso(); });
+        state.countdowns = state.countdowns.filter((c) => !extra.has(c.id));
+      }
+      if (keep.title !== item.title || keep.date !== item.targetDate || keep.taskId !== item.id) {
+        keep.title = item.title; keep.date = item.targetDate; keep.taskId = item.id; keep.updatedAt = nowIso();
+      }
+    } else {
+      state.countdowns.push(normCountdown({ title: item.title, date: item.targetDate, emoji: '⏳', taskId: item.id, cdTaskId: item.id }));
+    }
+  }
+  function removeTaskCountdown(itemId) {
+    const mine = state.countdowns.filter((c) => c.cdTaskId && c.cdTaskId === itemId);
+    if (!mine.length) return;
+    const ids = new Set(mine.map((c) => c.id));
+    mine.forEach((c) => { state.deleted[c.id] = nowIso(); });
+    state.countdowns = state.countdowns.filter((c) => !ids.has(c.id));
   }
   // Googleカレンダーから消してほしい予定（コーチが処理して calendar-links.json の deleted に書く）
   function normGcalDelete(g) {
@@ -287,6 +325,7 @@
   function addItem(data) {
     const it = normItem({ ...data, id: uid(), createdAt: nowIso(), updatedAt: nowIso() });
     state.items.unshift(it);
+    syncTaskCountdown(it); // v1.8.3：期限つきで作ったらカウントダウンにも出す
     save();
     return it;
   }
@@ -294,6 +333,7 @@
     it.status = status;
     it.completedAt = status === 'done' ? nowIso() : '';
     touch(it, true);
+    syncTaskCountdown(it); // v1.8.3：完了でカウントダウンを外し、未完了に戻すと期限があれば出し直す
   }
   const monthKey = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
   const sessionsThisMonth = (l) => l.logs.filter((g) => g.date.startsWith(monthKey())).length;
@@ -435,7 +475,7 @@
   // ───────────────────────── 画面: TASK（v1.7.0 で旧「やりたい事」を全件表示に改名） ─────────────────────────
   // 分類（タスク／やりたい事／後回し／未整理）は問わず出す。状態の既定は未完了のみ（v1.7.1。完了済みは
   // 状態フィルターで「すべて／完了」を選べば見られる）。絞り込みはフィルターで行う。
-  // v1.8.0：分類フィルターは廃止し、期限（目標日）フィルターに置き換えた。未整理の項目も既定表示
+  // v1.8.0：分類フィルターは廃止し、期限（targetDate＝〆切日）フィルターに置き換えた。未整理の項目も既定表示
   // （期限：すべて・未完了のみ）に出るので、そこから届く。行は左スワイプで「削除」ボタンが出る
   // （v1.7.1。実処理は p6 のスワイプ処理＋既存 deleteItem アクション）。
   const DUE_FILTERS = { today: '今日中', week: '今週中', month: '1ヶ月以内', over: '1ヶ月以上' };
@@ -473,7 +513,7 @@
       <select data-change="wishFilter" data-k="imp" aria-label="重要度">${options(IMPORTANCE, w.imp, '重要度: すべて')}</select>
       <select data-change="wishFilter" data-k="tf" aria-label="時期">${options(TIMEFRAME, w.tf, '時期: すべて')}</select>
       <select data-change="wishFilter" data-k="status" aria-label="状態">${opt('all', '状態: すべて', w.status)}${opt('open', '未完了のみ', w.status)}${options(STATUS, w.status)}</select>
-      <select data-change="wishFilter" data-k="sort" aria-label="並び替え">${opt('updated', '並び: 更新順', w.sort)}${opt('created', '並び: 作成順', w.sort)}${opt('importance', '並び: 重要度', w.sort)}${opt('timeframe', '並び: 時期', w.sort)}${opt('date', '並び: 目標日', w.sort)}${opt('title', '並び: 名前', w.sort)}</select>
+      <select data-change="wishFilter" data-k="sort" aria-label="並び替え">${opt('updated', '並び: 更新順', w.sort)}${opt('created', '並び: 作成順', w.sort)}${opt('importance', '並び: 重要度', w.sort)}${opt('timeframe', '並び: 時期', w.sort)}${opt('date', '並び: 期限', w.sort)}${opt('title', '並び: 名前', w.sort)}</select>
     </div>`);
     if (!all.length) {
       out.push(emptyState('タスクはまだありません', 'やるべきこと、行ってみたい場所、挑戦したいこと…。思いついたら「＋」から追加しましょう。',
@@ -1512,9 +1552,10 @@
         <div class="field"><span class="field-label">追加先</span><div class="seg wrap">${dests.map(([k, l]) => `<label class="pill-radio"><input type="radio" name="dest" value="${k}" ${def === k ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div></div>
         <div class="field qa-quad"><span class="field-label">緊急度 × 重要度</span>${quadSelect('quadrant', preset.quadrant || '')}</div>
         <div class="field qa-cat"><span class="field-label">カテゴリ</span><select name="category">${catOptions('プライベート', null)}</select></div>
+        <div class="field qa-due"><span class="field-label">期限（〆切日・任意）</span><input type="date" name="targetDate"><span class="muted small">入れるとカウントダウンにも自動で出ます</span></div>
         <div class="btn-row end"><button type="button" class="btn ghost" data-action="quickAddDetail">詳しく入力</button><button class="btn primary" type="submit">追加</button></div>
       </form>`, { onOpen: (box) => {
-      const upd = () => { const d = $('input[name=dest]:checked', box).value; $('.qa-quad', box).hidden = d === 'lesson'; $('.qa-cat', box).hidden = d === 'lesson' || d === 'inbox'; };
+      const upd = () => { const d = $('input[name=dest]:checked', box).value; $('.qa-quad', box).hidden = d === 'lesson'; $('.qa-cat', box).hidden = d === 'lesson' || d === 'inbox'; $('.qa-due', box).hidden = d === 'lesson'; };
       $$('input[name=dest]', box).forEach((x) => x.addEventListener('change', upd)); upd();
     } });
   }
@@ -1529,7 +1570,7 @@
       if (detail) openLessonEditor(l.id); else toast('習い事に追加しました');
       return;
     }
-    const it = addItem({ title, list: dest, quadrant: fd.get('quadrant') || '', category: fd.get('category') || '' });
+    const it = addItem({ title, list: dest, quadrant: fd.get('quadrant') || '', category: fd.get('category') || '', targetDate: fd.get('targetDate') || '' });
     closeModal(); rerender();
     if (detail) openItemEditor(it.id);
     else toast(`「${LISTS[dest]}」に追加しました`, { label: '開く', run: () => go('#item/' + it.id) });
@@ -1548,7 +1589,7 @@
           <label class="field"><span class="field-label">カテゴリ</span><select name="category">${catOptions(i.category, null)}</select></label>
           <label class="field"><span class="field-label">重要度</span><select name="importance">${options(IMPORTANCE, i.importance)}</select></label>
           <label class="field"><span class="field-label">目標の時期</span><select name="timeframe">${options(TIMEFRAME, i.timeframe, '（未設定）')}</select></label>
-          <label class="field"><span class="field-label">目標日（任意）</span><input type="date" name="targetDate" value="${esc(i.targetDate)}"></label>
+          <label class="field"><span class="field-label">期限（〆切日・任意）</span><input type="date" name="targetDate" value="${esc(i.targetDate)}"><span class="muted small">入れるとカウントダウンにも自動で出ます</span></label>
         </div>
         <div class="field"><span class="field-label">緊急度 × 重要度</span>${quadSelect('quadrant', i.quadrant)}</div>
         <div class="field"><span class="field-label">目安時間</span><div class="seg wrap"><label class="pill-radio"><input type="radio" name="estimate" value="" ${!i.estimate ? 'checked' : ''}><span>なし</span></label>${ESTIMATES.map((m) => `<label class="pill-radio"><input type="radio" name="estimate" value="${m}" ${i.estimate === m ? 'checked' : ''}><span>${estLabel(m)}</span></label>`).join('')}</div></div>
@@ -1572,6 +1613,7 @@
       tags: String(fd.get('tags') || '').split(/[,、]/).map((s) => s.trim()).filter(Boolean),
     });
     touch(i, prevList !== i.list);
+    syncTaskCountdown(i); // v1.8.3：期限・タイトルの変更をカウントダウンへ追従させる
     save(); closeModal(); rerender(); toast('保存しました');
   }
 
@@ -2200,7 +2242,7 @@
     L.push('', `## 進行中・未完了の項目（${act.length}件${act.length > items.length ? `、上位${items.length}件のみ` : ''}）`);
     if (!items.length) L.push('- なし');
     items.forEach((i) => {
-      const meta = [i.quadrant ? `${i.quadrant} ${QUADRANTS[i.quadrant].label}` : '未分類', LISTS[i.list], STATUS[i.status], `重要度${IMPORTANCE[i.importance]}`, i.targetDate ? `目標日${i.targetDate}` : '', i.steps.length ? `ステップ${stepsDone(i)}/${i.steps.length}` : '', isStuck(i) ? `停滞${idleDays(i)}日` : ''].filter(Boolean).join('・');
+      const meta = [i.quadrant ? `${i.quadrant} ${QUADRANTS[i.quadrant].label}` : '未分類', LISTS[i.list], STATUS[i.status], `重要度${IMPORTANCE[i.importance]}`, i.targetDate ? `期限${i.targetDate}` : '', i.steps.length ? `ステップ${stepsDone(i)}/${i.steps.length}` : '', isStuck(i) ? `停滞${idleDays(i)}日` : ''].filter(Boolean).join('・');
       const next = (i.steps.find((s) => !s.done) || {}).text;
       L.push(`- ${trunc(i.title, 40)}［${meta}］${next ? ` 次：${trunc(next, 30)}` : ''}`);
     });
@@ -3449,7 +3491,7 @@
       ${c.memo ? `<p class="cd-memo">${esc(c.memo)}</p>` : ''}
       ${t ? `<a class="cd-link small" href="#item/${t.id}">🔗 ${esc(trunc(t.title, 30))}</a>` : ''}
       ${gs ? `<p class="cd-gcal ${gs.cls} small">${gs.text}</p>` : ''}
-      ${c.readOnly ? '<p class="muted small cd-ro">Googleカレンダーの「⏳」つきの予定（変更は Google カレンダーで）</p>' : `<div class="btn-row end cd-actions"><button class="btn ghost small" data-action="cdEdit" data-id="${c.id}">編集</button><button class="btn ghost small danger" data-action="cdDelete" data-id="${c.id}">削除</button></div>`}
+      ${c.readOnly ? '<p class="muted small cd-ro">Googleカレンダーの「⏳」つきの予定（変更は Google カレンダーで）</p>' : c.cdTaskId ? '<p class="muted small cd-ro">📝 タスクの期限（〆切日）から自動作成（変更はタスクの編集から）</p>' : `<div class="btn-row end cd-actions"><button class="btn ghost small" data-action="cdEdit" data-id="${c.id}">編集</button><button class="btn ghost small danger" data-action="cdDelete" data-id="${c.id}">削除</button></div>`}
     </article>`;
   }
   const fmtStamp = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${pad(d.getMinutes())}`; };
@@ -3815,6 +3857,7 @@
   function cdPreviewText(v) { return isDateStr(v) ? `${fmtDate(v)} ・ ${cdText(daysUntil(v))}` : '日付を選んでください'; }
   function openCountdownEditor(id) {
     const c = id ? getCountdown(id) : null;
+    if (c && c.cdTaskId) { toast('このカウントダウンはタスクの期限と連動しています。変更はタスクの編集から行ってください'); return; } // v1.8.3：タスク由来はタスク側で管理
     const v = c || { emoji: '🎯', title: '', date: '', memo: '', taskId: '', gcal: false, source: '' };
     const items = state.items.filter((i) => i.status !== 'done' || i.id === v.taskId);
     const fromGoogle = v.source === 'google' && v.gcalId;
@@ -3840,6 +3883,7 @@
     if (!title) return;
     if (!isDateStr(date)) { toast('日付を選んでください'); return; }
     const c = getCountdown(form.dataset.id);
+    if (c && c.cdTaskId) { toast('このカウントダウンはタスクの期限と連動しています。変更はタスクの編集から行ってください'); return; } // v1.8.3
     const data = { title, date, emoji: String(fd.get('emoji') || '').trim() || '⏳', memo: String(fd.get('memo') || '').trim(), taskId: String(fd.get('taskId') || '') };
     if (!(c && c.source === 'google' && c.gcalId)) data.gcal = fd.get('gcal') === 'on';
     if (!c && date < todayStr()) { toast('今日以降の日付を選んでください'); return; }
@@ -3868,6 +3912,7 @@
   }
   async function deleteCountdown(id) {
     const c = getCountdown(id); if (!c) return;
+    if (c.cdTaskId) { toast('このカウントダウンはタスクの期限と連動しています。消すにはタスクの期限を外すか、タスクを完了・削除してください'); return; } // v1.8.3
     const snap = snapshot();
     const gid = c.gcal ? cdGcalId(c) : '';
     const fromGoogle = c.source === 'google';
@@ -3924,6 +3969,7 @@
       const snap = snapshot();
       state.items = state.items.filter((x) => x.id !== d.id);
       markDeleted(d.id);
+      removeTaskCountdown(d.id); // v1.8.3：タスクを消したら期限のカウントダウンも消す
       state.journal.forEach((e) => { if (e.linked.includes(d.id)) { e.linked = e.linked.filter((id) => id !== d.id); e.updatedAt = nowIso(); } });
       save(); closeModal();
       if (route().name === 'item') go('#' + ({ task: 'matrix', inbox: 'inbox', later: 'later', wish: 'wish' }[i.list] || 'habits')); else rerender();
@@ -3934,7 +3980,7 @@
       const snap = snapshot();
       if (d.list === 'lesson') {
         state.lessons.unshift(normLesson({ name: i.title, notes: i.notes, status: 'considering' }));
-        state.items = state.items.filter((x) => x.id !== i.id); markDeleted(i.id);
+        state.items = state.items.filter((x) => x.id !== i.id); markDeleted(i.id); removeTaskCountdown(i.id); // v1.8.3：項目でなくなるので期限のカウントダウンも消す
       } else { i.list = d.list; touch(i, true); }
       save(); rerender();
       toast(`「${d.list === 'lesson' ? '習い事' : LISTS[d.list]}」に移動しました`, { label: '元に戻す', run: () => restore(snap) });

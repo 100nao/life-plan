@@ -239,6 +239,66 @@
     e.preventDefault();
     fn(el.dataset, el, e);
   });
+
+  // ── TASK行の左スワイプ削除（v1.7.1） ──
+  // 行（.task-row-wrap 内の details）ごと左へドラッグすると背後の「削除」ボタン（data-action=deleteItem）が露出し、
+  // タップで既存の削除フローに乗る。削除ボタンは details の外に置く（閉じた details の summary 以外の子は描画されないため）。
+  // 縦方向はブラウザのスクロールに任せ（CSS の touch-action: pan-y）、横方向の移動が勝った場合だけスワイプ扱いにする。
+  // ドロワーのスワイプとは p4 の swipeBlocked（.task-row-wrap を除外）で競合回避済み。
+  const ROW_DEL_W = 76;
+  const rowSwipe = { row: null, wrap: null, sum: null, id: -1, x: 0, y: 0, base: 0, off: 0, lock: '', swallowUntil: 0 };
+  const closeRowSwipe = (except) => $$('.task-row-wrap.swiped').forEach((w) => { if (w !== except) { w.classList.remove('swiped'); const d = w.querySelector(':scope > .task-row'); if (d) d.style.transform = ''; } });
+  document.addEventListener('pointerdown', (e) => {
+    const sum = e.target.closest && e.target.closest('.task-row > summary');
+    rowSwipe.row = null; rowSwipe.lock = '';
+    if (!sum || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    rowSwipe.row = sum.parentElement; rowSwipe.sum = sum; rowSwipe.wrap = sum.closest('.task-row-wrap'); rowSwipe.id = e.pointerId;
+    rowSwipe.x = e.clientX; rowSwipe.y = e.clientY;
+    rowSwipe.base = rowSwipe.wrap && rowSwipe.wrap.classList.contains('swiped') ? -ROW_DEL_W : 0; rowSwipe.off = rowSwipe.base;
+  }, { passive: true });
+  document.addEventListener('pointermove', (e) => {
+    if (!rowSwipe.row || e.pointerId !== rowSwipe.id) return;
+    const dx = e.clientX - rowSwipe.x, dy = e.clientY - rowSwipe.y;
+    if (!rowSwipe.lock) {
+      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { rowSwipe.lock = 'v'; rowSwipe.row = null; return; } // 縦スクロールに譲る
+      if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+        rowSwipe.lock = 'h';
+        closeRowSwipe(rowSwipe.wrap);
+        rowSwipe.row.classList.add('dragging');
+        try { rowSwipe.sum.setPointerCapture(e.pointerId); } catch (err) { /* noop */ }
+      } else return;
+    }
+    if (rowSwipe.lock !== 'h') return;
+    rowSwipe.off = Math.max(-ROW_DEL_W, Math.min(0, rowSwipe.base + dx));
+    rowSwipe.row.style.transform = `translateX(${rowSwipe.off}px)`;
+  }, { passive: true });
+  const rowSwipeEnd = (e) => {
+    if (!rowSwipe.row || e.pointerId !== rowSwipe.id) return;
+    const row = rowSwipe.row, wrap = rowSwipe.wrap, wasH = rowSwipe.lock === 'h';
+    rowSwipe.row = null;
+    if (!wasH) return;
+    row.classList.remove('dragging');
+    row.style.transform = '';
+    if (wrap) wrap.classList.toggle('swiped', rowSwipe.off <= -ROW_DEL_W / 2);
+    rowSwipe.swallowUntil = Date.now() + 400; // ドラッグ直後の click で行が開閉しないように飲み込む
+  };
+  document.addEventListener('pointerup', rowSwipeEnd, { passive: true });
+  document.addEventListener('pointercancel', rowSwipeEnd, { passive: true });
+  document.addEventListener('click', (e) => { // capture：既存の委譲 click ハンドラより先に判定する
+    if (!e.target.closest) return;
+    if (Date.now() < rowSwipe.swallowUntil && e.target.closest('.task-row-wrap')) { e.preventDefault(); e.stopPropagation(); return; }
+    const open = document.querySelector('.task-row-wrap.swiped');
+    if (!open) return;
+    if (e.target.closest('.task-row-wrap') === open) {
+      if (e.target.closest('.task-row-del')) return; // 削除ボタンはそのまま通す
+      if (e.target.closest('summary')) { // 開いた行の summary タップはスワイプを閉じるだけ
+        open.classList.remove('swiped'); const d = open.querySelector(':scope > .task-row'); if (d) d.style.transform = '';
+        e.preventDefault(); e.stopPropagation();
+      }
+      return;
+    }
+    closeRowSwipe(null); // ほかの場所を触ったら閉じる
+  }, true);
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && e.target.matches('form[data-form=aiChat] textarea') && window.matchMedia('(pointer: fine)').matches) { e.preventDefault(); e.target.form.requestSubmit(); return; }
     if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role=button][data-action]')) { e.preventDefault(); e.target.click(); }

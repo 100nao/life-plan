@@ -276,8 +276,10 @@
   }
 
   // ───────────────────────── 画面: TASK（v1.7.0 で旧「やりたい事」を全件表示に改名） ─────────────────────────
-  // 分類（タスク／やりたい事／後回し／未整理）・状態を問わず全アイテムを出す。絞り込みはフィルターで行う。
+  // 分類（タスク／やりたい事／後回し／未整理）は問わず出す。状態の既定は未完了のみ（v1.7.1。完了済みは
+  // 状態フィルターで「すべて／完了」を選べば見られる）。絞り込みはフィルターで行う。
   // 未整理タブ廃止に伴い、未整理の項目にも ここの「分類： 未整理」フィルターで必ず届く。
+  // 行は左スワイプで「削除」ボタンが出る（v1.7.1。実処理は p6 のスワイプ処理＋既存 deleteItem アクション）。
   function viewWish() {
     const w = ui.wish;
     const all = state.items;
@@ -307,7 +309,7 @@
       out.push(emptyState('タスクはまだありません', 'やるべきこと、行ってみたい場所、挑戦したいこと…。思いついたら「＋」から追加しましょう。',
         `<button class="btn primary" data-action="quickAdd" data-list="task">＋ タスクを追加</button><button class="btn soft" data-action="addSamples">サンプルを追加</button>`));
     } else if (!list.length) out.push('<p class="muted center pad">条件に合う項目はありません。</p>');
-    else out.push(`<div class="list">${list.map((i) => `<details class="task-row" data-task-row="${i.id}"><summary><span class="task-row-ico" aria-hidden="true">${itemIcon(i)}</span><span class="grow"><b>${esc(trunc(i.title, 42))}</b></span>${chip(LISTS[i.list], 'list')}${i.status === 'done' ? chip('完了', 'doing') : ''}<span class="task-row-chev" aria-hidden="true">›</span></summary><div class="task-row-body">${itemCard(i, 'wish')}</div></details>`).join('')}</div>`);
+    else out.push(`<div class="list">${list.map((i) => `<div class="task-row-wrap" data-task-wrap="${i.id}"><button type="button" class="task-row-del" data-action="deleteItem" data-id="${i.id}" tabindex="-1" aria-label="削除">削除</button><details class="task-row" data-task-row="${i.id}"><summary><span class="task-row-ico" aria-hidden="true">${itemIcon(i)}</span><span class="grow"><b>${esc(trunc(i.title, 42))}</b></span>${chip(LISTS[i.list], 'list')}${i.status === 'done' ? chip('完了', 'doing') : ''}<span class="task-row-chev" aria-hidden="true">›</span></summary><div class="task-row-body">${itemCard(i, 'wish')}</div></details></div>`).join('')}</div>`);
     return out.join('');
   }
 

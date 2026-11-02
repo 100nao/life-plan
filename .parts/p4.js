@@ -154,7 +154,7 @@
   const isDrawerOpen = () => document.body.classList.contains('drawer-open');
   function swipeBlocked(t) {
     if (!t || !t.closest) return true;
-    if (t.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"], .modal-backdrop:not([hidden]), .photo-viewer, .pomu-celebrate')) return true;
+    if (t.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"], .modal-backdrop:not([hidden]), .photo-viewer, .pomu-celebrate, .task-row-wrap')) return true; // .task-row-wrap：行の左スワイプ削除（p6）と競合させない
     if (!backdrop.hidden) return true;
     for (let el = t; el && el !== document.body; el = el.parentElement) {
       if (el.scrollWidth > el.clientWidth + 2) { const ox = getComputedStyle(el).overflowX; if (ox === 'auto' || ox === 'scroll') return true; }

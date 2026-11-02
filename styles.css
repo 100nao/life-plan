@@ -1164,3 +1164,11 @@ button.hc-day.before:hover { background: var(--surface-2); }
 .task-row-chev { flex: none; color: var(--muted); font-size: 18px; transition: transform .15s; }
 .task-row[open ] .task-row-chev { transform: rotate(90deg); }
 .task-row-body .card.item { border: 0; border-top: 1px solid var(--border); border-radius: 0; box-shadow: none; margin: 0; }
+
+/* v1.7.1：TASK行のスワイプ削除（行ごと左へドラッグで背後の削除ボタンを露出） */
+.task-row-wrap { position: relative; margin-bottom: 10px; }
+.task-row-wrap .task-row { position: relative; z-index: 1; margin-bottom: 0; transition: transform .18s ease; }
+.task-row-wrap .task-row.dragging { transition: none; }
+.task-row-wrap.swiped .task-row { transform: translateX(-76px); }
+.task-row > summary { touch-action: pan-y; }
+.task-row-del { position: absolute; top: 0; right: 0; bottom: 0; width: 76px; z-index: 0; border: 0; border-radius: var(--radius); background: var(--danger); color: #fff; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }

@@ -769,7 +769,7 @@ with sync_playwright() as p:
     def dd(n): return (TD - datetime.timedelta(days=n)).isoformat()
     def pomu(done, start, today=None):
         return pg.evaluate("([d, s, t]) => LifePlan.pomu({id: 'x', name: 't', startDate: s, done: d}, t)", [done, start, today or TD.isoformat()])
-    check('バージョン 1.7.0', S(pg, 'LifePlan.version') == '1.7.0')
+    check('バージョン 1.7.1', S(pg, 'LifePlan.version') == '1.7.1')
     check('習慣：state.habits が配列', S(pg, 'Array.isArray(LifePlan.state.habits)'))
     # ぽむのルール
     r = pomu([], dd(0)); check('ぽむ：0日はたまご（stage-1）', r['key'] == 'stage-1' and r['lv'] == 1, r)
@@ -1056,7 +1056,7 @@ with sync_playwright() as p:
     db = pg.locator('#drawer').bounding_box()
     check('スワイプ：右から左へなぞるとメニューが開く', is_open() and pg.is_visible('#drawerBackdrop'))
     check('スワイプ：メニューは右側から出る', db and abs(db['x'] + db['width'] - 390) <= 2 and db['x'] > 30, db)
-    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.7.0' in pg.inner_text('#drawer [data-action=forceUpdate]'))
+    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.7.1' in pg.inner_text('#drawer [data-action=forceUpdate]'))
     shot(pg, 'v131_menu.png')
     swipe(90, 500, 330, 505)
     check('スワイプ：左から右へで閉じる', not is_open())
@@ -1610,8 +1610,14 @@ with sync_playwright() as p:
     tp.evaluate(f"localStorage.setItem('lifeplan.v1', JSON.stringify({json.dumps(tseed, ensure_ascii=False)}))")
     tp.reload(); wait_idle(tp, 500)
     tp.evaluate("location.hash = '#wish'"); wait_idle(tp, 500)
-    check('TASK：種別・状態をまたいで全件が出る（既定はすべて）', tp.locator('.task-row').count() == 5 and 'TASK' in tp.title(), tp.locator('.task-row').count())
-    check('TASK：完了済みも既定で出る', tp.locator('.task-row[data-task-row="tk5"]').count() == 1)
+    # v1.7.1：初期表示は「分類はすべて・状態は未完了のみ」
+    check('TASK：初期表示は分類を問わず未完了のみ（4件）', tp.locator('.task-row').count() == 4 and 'TASK' in tp.title(), tp.locator('.task-row').count())
+    check('TASK：初期表示に完了済みは出ない', tp.locator('.task-row[data-task-row="tk5"]').count() == 0)
+    check('TASK：状態フィルターの初期選択は「未完了のみ」', tp.eval_on_selector('select[data-change=wishFilter][data-k=status]', 's => s.value') == 'open')
+    tp.select_option('select[data-change=wishFilter][data-k=status]', 'all'); wait_idle(tp, 400)
+    check('TASK：状態＝すべてで完了済みも出る（全5件）', tp.locator('.task-row').count() == 5 and tp.locator('.task-row[data-task-row="tk5"]').count() == 1)
+    tp.select_option('select[data-change=wishFilter][data-k=status]', 'open'); wait_idle(tp, 400)
+    check('TASK：状態＝未完了のみに戻すと4件', tp.locator('.task-row').count() == 4)
     check('TASK：行は最初たたまれている', tp.evaluate("document.querySelector('.task-row[data-task-row=\"tk1\"]').open") is False)
     tp.click('.task-row[data-task-row="tk1"] > summary'); wait_idle(tp, 300)
     check('TASK：行を展開すると詳細・操作が見える', tp.evaluate("document.querySelector('.task-row[data-task-row=\"tk1\"]').open") is True and tp.locator('.task-row[data-task-row="tk1"] .card.item').is_visible())
@@ -1619,6 +1625,26 @@ with sync_playwright() as p:
     tp.select_option('select[data-change=wishFilter][data-k=list]', 'inbox'); wait_idle(tp, 400)
     check('TASK：分類＝未整理で未整理だけ出る（未整理タブ廃止の受け皿）', tp.locator('.task-row').count() == 1 and tp.locator('.task-row[data-task-row="tk4"]').count() == 1)
     tp.select_option('select[data-change=wishFilter][data-k=list]', ''); wait_idle(tp, 400)
+    # ── v1.7.1：TASK行のスワイプ削除 ──
+    sum2 = tp.locator('.task-row[data-task-row="tk2"] > summary')
+    sum2.scroll_into_view_if_needed(); wait_idle(tp, 300)
+    bb = sum2.bounding_box(); cx, cy = bb['x'] + bb['width'] / 2, bb['y'] + bb['height'] / 2
+    # (c) 縦方向のドラッグではスワイプ扱いにならない（方向ロック）。合成 PointerEvent で決定的に検証する
+    tp.evaluate("""([x, y]) => { const s = document.querySelector('.task-row[data-task-row=\"tk2\"] > summary');
+      const fire = (t, dx, dy) => s.dispatchEvent(new PointerEvent(t, { pointerId: 71, pointerType: 'touch', bubbles: true, clientX: x + dx, clientY: y + dy }));
+      fire('pointerdown', 0, 0); fire('pointermove', 2, -40); fire('pointermove', 3, -80); fire('pointerup', 3, -80); }""", [cx, cy])
+    wait_idle(tp, 300)
+    check('TASK：縦ドラッグでは削除ボタンは出ない（方向ロック）', tp.evaluate("document.querySelector('.task-row-wrap[data-task-wrap=\"tk2\"]').classList.contains('swiped')") is False and tp.evaluate("document.querySelector('.task-row[data-task-row=\"tk2\"]').open") is False)
+    tp.click('.task-row[data-task-row="tk2"] > summary'); wait_idle(tp, 300)
+    check('TASK：縦ドラッグ後も通常タップで開ける', tp.evaluate("document.querySelector('.task-row[data-task-row=\"tk2\"]').open") is True)
+    tp.click('.task-row[data-task-row="tk2"] > summary'); wait_idle(tp, 300)
+    # (b) 左スワイプ（実マウス操作）：削除ボタン露出 → スワイプ直後の click では開かない → 削除で tombstone
+    tp.mouse.move(cx, cy); tp.mouse.down(); tp.mouse.move(cx - 120, cy, steps=10); tp.mouse.up(); wait_idle(tp, 500)
+    check('TASK：左スワイプで削除ボタンが出る', tp.evaluate("document.querySelector('.task-row-wrap[data-task-wrap=\"tk2\"]').classList.contains('swiped')") is True and abs(tp.locator('.task-row[data-task-row="tk2"]').bounding_box()['x'] - (bb['x'] - 76)) < 3, tp.locator('.task-row[data-task-row="tk2"]').bounding_box())
+    check('TASK：スワイプ直後のクリックで行は開かない', tp.evaluate("document.querySelector('.task-row[data-task-row=\"tk2\"]').open") is False)
+    tp.click('.task-row-del[data-id="tk2"]'); wait_idle(tp, 600)
+    check('TASK：削除ボタンで行が消える', tp.locator('.task-row[data-task-row="tk2"]').count() == 0)
+    check('TASK：スワイプ削除でアイテム削除＋tombstone 記録', tp.evaluate("!LifePlan.state.items.some(i => i.id === 'tk2') && !!LifePlan.state.deleted['tk2']"))
     navs = tp.evaluate("[...document.querySelectorAll('.tabbar a[data-nav]')].filter(a => a.offsetParent).map(a => a.dataset.nav)")
     check('ナビ：下部タブは5つ（ホーム/マトリクス/TASK/カウントダウン/カレンダー）', navs == ['home', 'matrix', 'wish', 'countdown', 'calendar'], navs)
     check('ナビ：タブに未整理が無い・ジャーナルはモバイルタブに出ない', tp.locator('.tabbar a[data-nav=inbox]').count() == 0 and tp.evaluate("[...document.querySelectorAll('.tabbar a[data-nav=journal]')].filter(a => a.offsetParent).length") == 0)
@@ -1652,7 +1678,7 @@ with sync_playwright() as p:
     nav = sp.evaluate("performance.getEntriesByType('navigation')[0].name")
     check('アップデート：?v=<時刻> で読み込み直す', re.search(r'[?&]v=\d{10,}', nav) is not None and sp.evaluate('window.__beforeUpdate') is None, nav)
     check('アップデート：古いキャッシュを削除', 'lifeplan-old-test' not in sp.evaluate('caches.keys()'))
-    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.7.0' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
+    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.7.1' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
     check('アップデート：Service Worker は引き続き有効', sp.evaluate("navigator.serviceWorker.getRegistration().then(r => !!(r && r.active))"))
     swc.set_offline(True)
     sp.reload(); wait_idle(sp, 1200)

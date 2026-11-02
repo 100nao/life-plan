@@ -130,6 +130,12 @@
     toggleJDay: (d, el) => toggleJournalDay(d.date, el),
     viewPhoto: (d) => viewPhoto(d.photoId, d.entry),
     removeEditorPhoto: (d) => removeEditorPhoto(d.photoId),
+    cdNew: () => openCountdownEditor(),
+    cdEdit: (d) => openCountdownEditor(d.id),
+    cdDelete: (d) => deleteCountdown(d.id),
+    cdFromEvent: (d) => countdownFromEvent(d.id),
+    cdEmoji: (d) => { const inp = $('form[data-form=countdown] input[name=emoji]', modalBox); if (inp) inp.value = d.v; },
+    cdQuick: (d) => { const inp = $('form[data-form=countdown] input[name=date]', modalBox); if (!inp) return; inp.value = addMonthsStr(todayStr(), Number(d.m) || 1); const p = $('#cdPreview'); if (p) p.textContent = cdPreviewText(inp.value); },
     aiSugMove: (d) => moveSuggestion(d.id),
     aiSugDismiss: (d) => dismissSuggestion(d.id),
     aiSugReopen: (d) => reopenSuggestion(d.id),
@@ -266,6 +272,7 @@
       case 'lesson': submitLesson(f); break;
       case 'journal': submitJournal(f); break;
       case 'habit': submitHabit(f); break;
+      case 'countdown': submitCountdown(f); break;
       case 'syncSetup': testConnection(f); break;
       case 'photoJournal': submitPhotoJournal(f); break;
       case 'obsidianPaste': submitObsidianPaste(f); break;
@@ -384,5 +391,5 @@
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') setTimeout(() => maybeDailyAnalysis(), 800); });
 
   // テスト・デバッグ用（読み取りのみ）
-  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, pomu: (h, today) => { const i = pomuInfo(normHabit(h), today); return { key: i.key, name: i.name, route: i.route, lv: i.lv, total: i.total, M: i.M, streak: i.streak, best: i.best, hints: i.hints }; }, pomuChangeMsg, syncNow: () => syncNow(), topPomu: () => { const p = topPomu(); return { key: p.key, lv: p.lv, id: p.h ? p.h.id : '' }; }, photoIds: async () => (await photoAll()).map((r) => r.id).sort(), photoInfo: async (id) => { const r = await photoGet(id); return r ? { id: r.id, bytes: r.full.byteLength, synced: !!r.synced } : null; }, syncPhotos: () => syncPhotos(), photoGc: () => photoGc(), aiDaily: () => ({ ...aiDaily, manualLeft: manualLeft(), busy: anaUi.busy, error: anaUi.error, daily: aiDailyOn(), autoMove: aiAutoMoveOn() }), parseAnalysis, maybeDailyAnalysis: () => maybeDailyAnalysis(), runAnalysis: () => runAnalysis(true), photoDims: async (id) => { const r = await photoGet(id); if (!r) return null; const b = await createImageBitmap(new Blob([r.full], { type: 'image/jpeg' })); return [b.width, b.height, r.full.byteLength]; } };
+  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, pomu: (h, today) => { const i = pomuInfo(normHabit(h), today); return { key: i.key, name: i.name, route: i.route, lv: i.lv, total: i.total, M: i.M, streak: i.streak, best: i.best, hints: i.hints }; }, pomuChangeMsg, syncNow: () => syncNow(), topPomu: () => { const p = topPomu(); return { key: p.key, lv: p.lv, id: p.h ? p.h.id : '' }; }, photoIds: async () => (await photoAll()).map((r) => r.id).sort(), photoInfo: async (id) => { const r = await photoGet(id); return r ? { id: r.id, bytes: r.full.byteLength, synced: !!r.synced } : null; }, syncPhotos: () => syncPhotos(), photoGc: () => photoGc(), aiDaily: () => ({ ...aiDaily, manualLeft: manualLeft(), busy: anaUi.busy, error: anaUi.error, daily: aiDailyOn(), autoMove: aiAutoMoveOn() }), analysisContext: () => analysisContext(), checkDayRollover: () => checkDayRollover(), get calendar() { return cal; }, pullCalendar: () => pullCalendar(), parseAnalysis, maybeDailyAnalysis: () => maybeDailyAnalysis(), runAnalysis: () => runAnalysis(true), photoDims: async (id) => { const r = await photoGet(id); if (!r) return null; const b = await createImageBitmap(new Blob([r.full], { type: 'image/jpeg' })); return [b.width, b.height, r.full.byteLength]; } };
 })();

@@ -118,6 +118,8 @@
     }
 
     // ✨ 今日の分析（Gemini）
+    out.push(homeCountdownCard());
+    out.push(homeScheduleCard());
     out.push(homeAnalysisCard());
 
     if (isEmpty) {

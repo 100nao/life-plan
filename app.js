@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.4.0';
+  const APP_VERSION = '1.5.0';
   const DEFAULT_CATEGORIES = ['旅行', '仕事/キャリア', '健康', '家族', '趣味', '学び', 'お金', 'その他'];
   const IMPORTANCE = { high: '高', mid: '中', low: '低' };
   const IMPORTANCE_ORDER = { high: 0, mid: 1, low: 2 };
@@ -98,7 +98,7 @@
 
   // ───────────────────────── 保存 ─────────────────────────
   function defaultState() {
-    return { schema: 2, categories: [...DEFAULT_CATEGORIES], categoriesAt: '', items: [], lessons: [], journal: [], coachNotes: [], habits: [], aiAnalyses: [], aiSuggestions: [], focus: {}, focusAt: {}, deleted: {}, settings: { theme: 'auto', bg: 'mist' } };
+    return { schema: 2, categories: [...DEFAULT_CATEGORIES], categoriesAt: '', items: [], lessons: [], journal: [], coachNotes: [], habits: [], aiAnalyses: [], aiSuggestions: [], countdowns: [], gcalDeletes: [], focus: {}, focusAt: {}, deleted: {}, settings: { theme: 'auto', bg: 'mist' } };
   }
   function normStep(s) {
     if (typeof s === 'string') s = { text: s };
@@ -189,6 +189,19 @@
       createdAt: a.createdAt || t, updatedAt: a.updatedAt || t,
     };
   }
+  // v1.5.0：⏳ カウントダウン。source は将来のカレンダー連携用（'' | 'google' | 'apple'）
+  function normCountdown(c) {
+    const t = nowIso();
+    const o = { id: String(c.id || uid()), title: String(c.title || '').trim() || '（無題）', emoji: String(c.emoji || '⏳'), date: isDateStr(c.date) ? c.date : todayStr(),
+      memo: String(c.memo || ''), taskId: String(c.taskId || ''), gcal: !!c.gcal, gcalId: String(c.gcalId || ''), source: ['google', 'apple'].includes(c.source) ? c.source : '',
+      createdAt: c.createdAt || t, updatedAt: c.updatedAt || t };
+    return o;
+  }
+  // Googleカレンダーから消してほしい予定（コーチが処理して calendar-links.json の deleted に書く）
+  function normGcalDelete(g) {
+    const t = nowIso();
+    return { id: 'gdel:' + String(g.gcalId || ''), gcalId: String(g.gcalId || ''), countdownId: String(g.countdownId || ''), title: String(g.title || ''), date: isDateStr(g.date) ? g.date : '', reason: g.reason === 'off' ? 'off' : 'deleted', createdAt: g.createdAt || t, updatedAt: g.updatedAt || t };
+  }
   function normalizeState(raw) {
     const s = defaultState();
     if (!raw || typeof raw !== 'object') return s;
@@ -200,6 +213,8 @@
     s.habits = (Array.isArray(raw.habits) ? raw.habits : []).filter((h) => h && typeof h === 'object').map(normHabit); // v1.3.0〜（古いデータには無い）
     s.aiAnalyses = (Array.isArray(raw.aiAnalyses) ? raw.aiAnalyses : []).filter((a) => a && typeof a === 'object').map(normAnalysis); // v1.4.0〜
     s.aiSuggestions = (Array.isArray(raw.aiSuggestions) ? raw.aiSuggestions : []).filter((a) => a && typeof a === 'object' && a.title).map(normAiSuggestion);
+    s.countdowns = (Array.isArray(raw.countdowns) ? raw.countdowns : []).filter((c) => c && typeof c === 'object' && c.title).map(normCountdown); // v1.5.0〜
+    s.gcalDeletes = (Array.isArray(raw.gcalDeletes) ? raw.gcalDeletes : []).filter((g) => g && g.gcalId).map(normGcalDelete);
     s.focus = raw.focus && typeof raw.focus === 'object' ? { ...raw.focus } : {};
     s.focusAt = raw.focusAt && typeof raw.focusAt === 'object' ? { ...raw.focusAt } : {};
     s.deleted = raw.deleted && typeof raw.deleted === 'object' ? { ...raw.deleted } : {};
@@ -238,7 +253,7 @@
     const next = normalizeState(JSON.parse(snap));
     const now = nowIso();
     next.deleted = { ...next.deleted, ...prev.deleted };
-    ['items', 'lessons', 'journal', 'coachNotes', 'habits', 'aiAnalyses', 'aiSuggestions'].forEach((k) => {
+    ['items', 'lessons', 'journal', 'coachNotes', 'habits', 'aiAnalyses', 'aiSuggestions', 'countdowns', 'gcalDeletes'].forEach((k) => {
       const prevMap = new Map(prev[k].map((x) => [x.id, JSON.stringify(x)]));
       const nextIds = new Set(next[k].map((x) => x.id));
       next[k].forEach((x) => { if (prevMap.get(x.id) !== JSON.stringify(x)) { x.updatedAt = now; delete next.deleted[x.id]; } });
@@ -414,6 +429,8 @@
     }
 
     // ✨ 今日の分析（Gemini）
+    out.push(homeCountdownCard());
+    out.push(homeScheduleCard());
     out.push(homeAnalysisCard());
 
     if (isEmpty) {
@@ -1382,8 +1399,8 @@
 
   // ───────────────────────── ルーティングと描画 ─────────────────────────
   const main = $('#main');
-  const VIEWS = { home: viewHome, matrix: viewMatrix, wish: viewWish, later: viewLater, lessons: viewLessons, inbox: viewInbox, journal: viewJournal, done: viewDone, search: viewSearch, settings: viewSettings, coach: viewCoach, item: viewItem, ai: viewAI, habits: viewHabits, aisuggest: viewAiSuggest };
-  const TITLES = { home: 'ホーム', matrix: 'マトリックス', wish: 'やりたい事', later: '後回しでいい事', lessons: '習い事', inbox: '未整理', journal: 'ジャーナル', done: '完了履歴', search: '検索', settings: '設定', coach: 'コーチに相談', item: '詳細', ai: 'AIに相談', habits: '習慣スタンプ', aisuggest: 'AI提案' };
+  const VIEWS = { home: viewHome, matrix: viewMatrix, wish: viewWish, later: viewLater, lessons: viewLessons, inbox: viewInbox, journal: viewJournal, done: viewDone, search: viewSearch, settings: viewSettings, coach: viewCoach, item: viewItem, ai: viewAI, habits: viewHabits, aisuggest: viewAiSuggest, countdown: viewCountdown };
+  const TITLES = { home: 'ホーム', matrix: 'マトリックス', wish: 'やりたい事', later: '後回しでいい事', lessons: '習い事', inbox: '未整理', journal: 'ジャーナル', done: '完了履歴', search: '検索', settings: '設定', coach: 'コーチに相談', item: '詳細', ai: 'AIに相談', habits: '習慣スタンプ', aisuggest: 'AI提案', countdown: 'カウントダウン' };
   function route() {
     const h = decodeURIComponent(location.hash.replace(/^#\/?/, ''));
     const idx = h.indexOf('/');
@@ -2084,7 +2101,7 @@
   }
 
   // ───────────────────────── 統合（同期・読み込み共通） ─────────────────────────
-  const SYNC_COLLECTIONS = ['items', 'lessons', 'journal', 'coachNotes', 'habits', 'aiAnalyses', 'aiSuggestions'];
+  const SYNC_COLLECTIONS = ['items', 'lessons', 'journal', 'coachNotes', 'habits', 'aiAnalyses', 'aiSuggestions', 'countdowns', 'gcalDeletes'];
   const canonical = (a, b) => (b.createdAt || '').localeCompare(a.createdAt || '') || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   function mergeStates(local, remote) {
     const out = normalizeState(JSON.parse(JSON.stringify(local)));
@@ -2228,6 +2245,7 @@
           if (changeGen === gen) sync.dirty = false; else syncAgain = true;
         }
         await pullCoachInbox();
+        await pullCalendar().catch((e) => { calUi.error = e.message || String(e); });
         sync.lastSyncAt = nowIso(); sync.lastError = ''; saveSync(); setSyncState('ok');
         photoSyncSoon(400);
       } catch (e) {
@@ -3015,6 +3033,7 @@
     const since = addDays(t, -14);
     const j = state.journal.filter((e) => e.date >= since && e.text.trim()).sort((a, b) => (a.date + a.createdAt).localeCompare(b.date + b.createdAt)).slice(-12);
     if (j.length) { L.push('## 直近14日のジャーナル'); j.forEach((e) => L.push(`- ${e.date}${e.mood ? ` 気分${e.mood}` : ''}：${trunc(e.text.replace(/\s+/g, ' '), 110)}`)); }
+    const cdc = countdownContext(); if (cdc) L.splice(1, 0, cdc);
     const s = L.join('\n');
     return s.length > 4500 ? s.slice(0, 4500) + '\n…' : s;
   }
@@ -3222,6 +3241,214 @@
     return addSuggestions(norm1, { source: 'coach', ref: noteId, date, idPrefix: 'sug:' + noteId });
   }
 
+  // ───────────────────────── ⏳ カウントダウン（v1.5.0） ─────────────────────────
+  // 日数は端末のローカル日付（日本なら JST）で数え、0時に切り替わる。
+  const CD_EMOJIS = ['🎤', '🎯', '✈️', '🎂', '💍', '🏃', '📝', '🎓', '💼', '🏠', '🎉', '⭐'];
+  const getCountdown = (id) => state.countdowns.find((c) => c.id === id);
+  const cdDays = (c) => daysUntil(c.date);
+
+  // ── Googleカレンダー（読むだけ）：data/calendar.json と data/calendar-links.json は毎朝コーチが書く ──
+  const CAL_KEY = 'lifeplan.calendar';
+  const calUi = { error: '', open: false };
+  let cal = (() => { try { const o = JSON.parse(localStorage.getItem(CAL_KEY) || '{}'); return { calendar: o.calendar || null, links: o.links || null, fetchedAt: o.fetchedAt || '' }; } catch (e) { return { calendar: null, links: null, fetchedAt: '' }; } })();
+  const saveCal = () => { try { localStorage.setItem(CAL_KEY, JSON.stringify(cal)); } catch (e) { /* noop */ } };
+  const dataDir = () => (sync.path || 'data/life-plan.json').replace(/[^/]*$/, '');
+  const calPath = () => dataDir() + 'calendar.json';
+  const calLinksPath = () => dataDir() + 'calendar-links.json';
+  const evDate = (v) => { const t = String(v || ''); if (isDateStr(t)) return t; if (isDateStr(t.slice(0, 10)) && !/[T ]\d/.test(t)) return t.slice(0, 10); const d = new Date(t); return isNaN(d) ? '' : todayStr(d); };
+  const evTime = (ev) => { if (ev.allDay || isDateStr(String(ev.start || ''))) return ''; const d = new Date(ev.start); return isNaN(d) ? '' : `${d.getHours()}:${pad(d.getMinutes())}`; };
+  function normEvent(e) {
+    if (!e || typeof e !== 'object' || !e.id) return null;
+    const date = evDate(e.start); if (!date) return null;
+    return { id: String(e.id), title: String(e.title || e.summary || '（無題の予定）'), start: String(e.start), end: String(e.end || ''), date, allDay: e.allDay === true || isDateStr(String(e.start)), location: String(e.location || '') };
+  }
+  const calEvents = () => ((cal.calendar && Array.isArray(cal.calendar.events)) ? cal.calendar.events : []).map(normEvent).filter(Boolean).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
+  const calLinks = () => (cal.links && cal.links.links && typeof cal.links.links === 'object' ? cal.links.links : {});
+  const calLinkDeleted = () => (cal.links && cal.links.deleted && typeof cal.links.deleted === 'object' ? cal.links.deleted : {});
+  const HOURGLASS = /⏳/;
+  const stripHourglass = (t) => t.replace(/⏳\uFE0F?/g, '').trim() || t;
+  // このカウントダウンにつながっている Google の予定 id（Google から作った → gcalId、アプリから送った → calendar-links.json）
+  const cdGcalId = (c) => c.gcalId || (calLinks()[c.id] && calLinks()[c.id].gcalId) || '';
+  function cdGcalStatus(c) {
+    if (c.source === 'google' && c.gcalId) return { cls: 'g-linked', text: 'Googleカレンダーの予定から' };
+    if (!c.gcal) return null;
+    const l = calLinks()[c.id];
+    if (!l || !l.gcalId) return { cls: 'g-pending', text: '📅 明日の朝に同期されます' };
+    if (l.syncedAt && c.updatedAt > l.syncedAt) return { cls: 'g-pending', text: '📅 同期済み・変更は明日の朝に反映されます' };
+    return { cls: 'g-ok', text: '📅 同期済み' };
+  }
+  async function pullCalendar() {
+    const [f1, f2] = await Promise.all([ghGetFile(calPath()), ghGetFile(calLinksPath())]);
+    const parse = (f) => { if (!f.exists || !f.text.trim()) return null; try { return JSON.parse(f.text); } catch (e) { return extractJson(f.text); } };
+    const c1 = parse(f1); const c2 = parse(f2);
+    const before = JSON.stringify([cal.calendar, cal.links]);
+    cal = { calendar: c1 && typeof c1 === 'object' ? c1 : null, links: c2 && typeof c2 === 'object' ? c2 : null, fetchedAt: nowIso() };
+    calUi.error = ''; saveCal();
+    // コーチが Google から消した予定は、削除の依頼リストから外す
+    const dels = calLinkDeleted();
+    const done = state.gcalDeletes.filter((g) => dels[g.gcalId]);
+    if (done.length) { state.gcalDeletes = state.gcalDeletes.filter((g) => !dels[g.gcalId]); done.forEach((g) => markDeleted(g.id)); save(); }
+    if (before !== JSON.stringify([cal.calendar, cal.links]) || done.length) rerenderSoft();
+    return true;
+  }
+  // ⏳ を含む Google の予定は、自動でカウントダウンに（読み取り専用・保存しない）
+  function googleCountdowns() {
+    const t = todayStr();
+    const linked = new Set(state.countdowns.map(cdGcalId).filter(Boolean));
+    return calEvents().filter((e) => HOURGLASS.test(e.title) && e.date >= t && !linked.has(e.id))
+      .map((e) => ({ id: 'gcal:' + e.id, title: stripHourglass(e.title), emoji: '⏳', date: e.date, memo: e.location ? '📍 ' + e.location : '', taskId: '', source: 'google', gcalId: e.id, readOnly: true, createdAt: (cal.calendar && cal.calendar.updatedAt) || nowIso(), updatedAt: '' }));
+  }
+  function sortedCountdowns() {
+    const all = [...state.countdowns, ...googleCountdowns()];
+    const up = all.filter((c) => cdDays(c) >= 0).sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
+    const past = all.filter((c) => cdDays(c) < 0).sort((a, b) => b.date.localeCompare(a.date));
+    return { up, past };
+  }
+  function countdownFromEvent(gid) {
+    const e = calEvents().find((x) => x.id === gid); if (!e) return;
+    const ex = state.countdowns.find((c) => cdGcalId(c) === gid);
+    if (ex) { toast('もうカウントダウンになっています'); return; }
+    const snap = snapshot();
+    const nc = normCountdown({ title: stripHourglass(e.title), date: e.date, emoji: '📅', memo: e.location ? '📍 ' + e.location : '', source: 'google', gcalId: gid });
+    calUi.open = true; state.countdowns.push(nc); save(); rerender();
+    undoable(`⏳ 「${trunc(nc.title, 16)}」まで ${cdText(cdDays(nc))}`, snap);
+  }
+  function queueGcalDelete(c, reason) {
+    const gid = cdGcalId(c);
+    if (!gid || c.source === 'google') return; // Google から作ったものは Google 側を消さない
+    const ex = state.gcalDeletes.find((g) => g.gcalId === gid);
+    if (!ex) state.gcalDeletes.push(normGcalDelete({ gcalId: gid, countdownId: c.id, title: c.title, date: c.date, reason }));
+    delete state.deleted['gdel:' + gid];
+  }
+
+  function cdLabel(n) {
+    if (n === 0) return '<b class="cd-num today">今日！</b>';
+    if (n > 0) return `<span class="cd-pre">あと</span><b class="cd-num">${n.toLocaleString('ja-JP')}</b><span class="cd-unit">日</span>`;
+    return `<b class="cd-num past">${(-n).toLocaleString('ja-JP')}</b><span class="cd-unit">日経過</span>`;
+  }
+  const cdText = (n) => (n === 0 ? '今日！' : n > 0 ? `あと${n}日` : `${-n}日経過`);
+  function cdProgress(c) {
+    const start = isoToDate(c.createdAt) || todayStr();
+    const total = -daysUntil(start) + cdDays(c); // 作成日 → 目標日
+    const done = -daysUntil(start);
+    const pct = total <= 0 ? 100 : Math.max(0, Math.min(100, Math.round((done / total) * 100)));
+    return { pct, start };
+  }
+  function countdownCard(c) {
+    const n = cdDays(c); const pr = cdProgress(c); const t = c.taskId ? getItem(c.taskId) : null; const gs = c.readOnly ? null : cdGcalStatus(c);
+    return `<article class="card cd-card ${n === 0 ? 'is-today' : n < 0 ? 'is-past' : ''} ${c.readOnly ? 'is-google' : ''}" data-cd="${c.id}">
+      <div class="cd-top"><span class="cd-emoji" aria-hidden="true">${esc(c.emoji || '⏳')}</span>
+        <div class="cd-main"><h3 class="cd-title">${esc(c.title)}${c.readOnly ? ' <span class="chip g-badge">Google</span>' : ''}</h3><p class="cd-date">${fmtDate(c.date)}</p></div>
+        <div class="cd-count" aria-label="${cdText(n)}">${cdLabel(n)}</div></div>
+      ${n >= 0 && !c.readOnly ? `<div class="cd-bar" role="progressbar" aria-valuenow="${pr.pct}" aria-valuemin="0" aria-valuemax="100" aria-label="作成日からの進み具合"><span style="width:${pr.pct}%"></span></div>
+      <div class="cd-bar-meta muted small"><span>${fmtShort(pr.start)} から</span><span>${pr.pct}%</span></div>` : ''}
+      ${c.memo ? `<p class="cd-memo">${esc(c.memo)}</p>` : ''}
+      ${t ? `<a class="cd-link small" href="#item/${t.id}">🔗 ${esc(trunc(t.title, 30))}</a>` : ''}
+      ${gs ? `<p class="cd-gcal ${gs.cls} small">${gs.text}</p>` : ''}
+      ${c.readOnly ? '<p class="muted small cd-ro">Googleカレンダーの「⏳」つきの予定（変更は Google カレンダーで）</p>' : `<div class="btn-row end cd-actions"><button class="btn ghost small" data-action="cdEdit" data-id="${c.id}">編集</button><button class="btn ghost small danger" data-action="cdDelete" data-id="${c.id}">削除</button></div>`}
+    </article>`;
+  }
+  const fmtStamp = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${pad(d.getMinutes())}`; };
+  function calSyncLine() {
+    if (cal.calendar && cal.calendar.updatedAt) return `<p class="cal-sync muted small">📅 Googleカレンダー最終同期: ${esc(fmtStamp(cal.calendar.updatedAt))}${calUi.error ? `<span class="error-text">（読み込みエラー：${esc(calUi.error)}）</span>` : ''}</p>`;
+    return `<p class="cal-sync muted small">📅 Googleカレンダーはまだ届いていません${sync.connected ? '（毎朝7時ごろコーチが更新します）' : '（GitHub 同期をつなぐと届きます）'}</p>`;
+  }
+  function viewCountdown() {
+    const { up, past } = sortedCountdowns();
+    const out = [sectionHead('⏳ カウントダウン', up.length ? `${up.length}件・近い順` : '大きな予定や目標の日まで', '<button class="btn primary small" data-action="cdNew">＋ 追加</button>')];
+    out.push(calSyncLine());
+    if (!up.length && !past.length) out.push(emptyState('まだカウントダウンはありません', '発表・旅行・試験など、大きな予定や目標の日を選ぶと、その日まで「あと何日」を毎日数えます。Googleカレンダーで予定名に「⏳」を入れると、ここに自動で並びます。', '<button class="btn primary" data-action="cdNew">＋ カウントダウンをつくる</button>'));
+    out.push(up.map(countdownCard).join(''));
+    const evs = calEvents().filter((e) => e.date >= todayStr() && !HOURGLASS.test(e.title)).slice(0, 40);
+    if (evs.length) {
+      const linked = new Set(state.countdowns.map(cdGcalId).filter(Boolean));
+      out.push(`<details class="card cal-events" ${calUi.open ? 'open' : ''}><summary><b>📅 Googleカレンダーの予定</b><span class="muted small">（${evs.length}件）カウントダウンにできます</span></summary><ul class="plain-list">${evs.map((e) => `<li class="cal-ev" data-gev="${esc(e.id)}"><span class="cal-ev-d">${fmtShort(e.date)}<small>${'日月火水木金土'[new Date(e.date + 'T00:00').getDay()]}</small></span><span class="grow"><b>${esc(trunc(e.title, 28))}</b>${evTime(e) ? `<span class="muted small"> ${evTime(e)}</span>` : ''}</span>${linked.has(e.id) ? '<span class="chip sync-ok">カウントダウン中</span>' : `<button class="btn soft small" data-action="cdFromEvent" data-id="${esc(e.id)}">→ カウントダウンにする</button>`}</li>`).join('')}</ul></details>`);
+    }
+    if (past.length) out.push(`<details class="cd-past-wrap"><summary class="month-head">終わった予定（${past.length}件）</summary>${past.map(countdownCard).join('')}</details>`);
+    return out.join('');
+  }
+  function homeCountdownCard() {
+    const { up } = sortedCountdowns();
+    if (!up.length) return '';
+    return `<section class="card cd-home"><div class="card-head"><h2>⏳ カウントダウン</h2><a class="link small" href="#countdown">すべて見る</a></div>
+      <ul class="cd-mini">${up.slice(0, 3).map((c) => { const n = cdDays(c); return `<li><a href="#countdown" class="cd-mini-row"><span class="cd-emoji sm" aria-hidden="true">${esc(c.emoji || '⏳')}</span><span class="grow"><b>${esc(trunc(c.title, 22))}</b><span class="muted small"> ${fmtShort(c.date)}</span></span><span class="cd-mini-n ${n === 0 ? 'today' : ''}">${n === 0 ? '今日！' : `あと<b>${n}</b>日`}</span></a></li>`; }).join('')}</ul></section>`;
+  }
+  // ホーム：これからの予定（7日間・Googleカレンダー）
+  function homeScheduleCard() {
+    const t = todayStr(); const end = addDays(t, 7);
+    const evs = calEvents().filter((e) => e.date >= t && e.date <= end);
+    if (!cal.calendar) return '';
+    const rows = evs.slice(0, 6).map((e) => { const n = daysUntil(e.date); return `<li class="sched-row"><span class="sched-d ${n === 0 ? 'today' : ''}">${n === 0 ? '今日' : n === 1 ? '明日' : fmtShort(e.date)}<small>${'日月火水木金土'[new Date(e.date + 'T00:00').getDay()]}</small></span><span class="grow"><b>${esc(trunc(stripHourglass(e.title), 26))}</b><span class="muted small">${evTime(e) ? ' ' + evTime(e) : ' 終日'}${e.location ? '・' + esc(trunc(e.location, 14)) : ''}</span></span></li>`; }).join('');
+    return `<section class="card sched-home"><div class="card-head"><h2>📅 これからの予定</h2><a class="link small" href="#countdown">カウントダウン</a></div>
+      ${rows ? `<ul class="sched-list">${rows}</ul>${evs.length > 6 ? `<p class="muted small">ほか ${evs.length - 6}件</p>` : ''}` : '<p class="muted small">この7日間の予定はありません</p>'}
+      <p class="muted small cal-sync">Googleカレンダー最終同期: ${esc(fmtStamp(cal.calendar.updatedAt || cal.fetchedAt))}</p></section>`;
+  }
+  function addMonthsStr(base, m) { const [y, mo, d] = base.split('-').map(Number); const dt = new Date(y, mo - 1 + m, 1); const last = new Date(dt.getFullYear(), dt.getMonth() + 1, 0).getDate(); dt.setDate(Math.min(d, last)); return todayStr(dt); }
+  function cdPreviewText(v) { return isDateStr(v) ? `${fmtDate(v)} ・ ${cdText(daysUntil(v))}` : '日付を選んでください'; }
+  function openCountdownEditor(id) {
+    const c = id ? getCountdown(id) : null;
+    const v = c || { emoji: '🎯', title: '', date: '', memo: '', taskId: '', gcal: false, source: '' };
+    const items = state.items.filter((i) => i.status !== 'done' || i.id === v.taskId);
+    const fromGoogle = v.source === 'google' && v.gcalId;
+    openModal(`${modalHead(c ? 'カウントダウンを編集' : 'カウントダウンをつくる')}
+      <form data-form="countdown" data-id="${c ? c.id : ''}">
+        <div class="habit-name-row"><label class="field emoji-field"><span class="field-label">絵文字</span><input name="emoji" value="${esc(v.emoji)}" maxlength="8" autocomplete="off" aria-label="絵文字"></label>
+          <label class="field grow"><span class="field-label">予定・目標</span><input name="title" value="${esc(v.title)}" required autocomplete="off" placeholder="例：役員発表、ハワイ旅行" ${c ? '' : 'autofocus'}></label></div>
+        <div class="emoji-pick" role="group" aria-label="絵文字を選ぶ">${CD_EMOJIS.map((e) => `<button type="button" class="emoji-opt" data-action="cdEmoji" data-v="${e}">${e}</button>`).join('')}</div>
+        <div class="field cd-date-field"><span class="field-label">日付</span>
+          <label class="cd-date-pick"><span class="cd-cal" aria-hidden="true">📅</span><input type="date" name="date" value="${esc(v.date)}" ${c ? '' : `min="${todayStr()}"`} required aria-label="日付"></label>
+          <div class="cd-quick" role="group" aria-label="かんたん選択">${[[1, '1か月後'], [3, '3か月後'], [6, '半年後'], [12, '1年後']].map(([m, l]) => `<button type="button" class="chip-btn" data-action="cdQuick" data-m="${m}">${l}</button>`).join('')}</div>
+          <p class="cd-preview" id="cdPreview">${cdPreviewText(v.date)}</p></div>
+        <label class="field"><span class="field-label">メモ（任意）</span><textarea name="memo" rows="2" placeholder="例：資料は2週間前に完成">${esc(v.memo)}</textarea></label>
+        <label class="field"><span class="field-label">関連するタスク・目標（任意）</span><select name="taskId"><option value="">（なし）</option>${items.map((i) => `<option value="${i.id}" ${i.id === v.taskId ? 'selected' : ''}>${esc(trunc(i.title, 40))}</option>`).join('')}</select></label>
+        ${fromGoogle ? '<p class="muted small">📅 Googleカレンダーの予定から作ったカウントダウンです（ここで変えても Google の予定は変わりません）</p>' : `<label class="check-line cd-gcal-toggle"><input type="checkbox" name="gcal" ${v.gcal ? 'checked' : ''}> 📅 Googleカレンダーにも入れる<span class="muted small">（毎朝7時ごろコーチが「⏳ 予定名」の終日予定を作ります）</span></label>`}
+        <div class="btn-row between">${c ? `<button type="button" class="btn ghost danger" data-action="cdDelete" data-id="${c.id}">削除</button>` : '<span></span>'}
+          <span class="btn-row"><button type="button" class="btn ghost" data-action="closeModal">キャンセル</button><button class="btn primary" type="submit">${c ? '保存' : 'つくる'}</button></span></div>
+      </form>`);
+  }
+  function submitCountdown(form) {
+    const fd = new FormData(form);
+    const title = String(fd.get('title') || '').trim(); const date = String(fd.get('date') || '');
+    if (!title) return;
+    if (!isDateStr(date)) { toast('日付を選んでください'); return; }
+    const c = getCountdown(form.dataset.id);
+    const data = { title, date, emoji: String(fd.get('emoji') || '').trim() || '⏳', memo: String(fd.get('memo') || '').trim(), taskId: String(fd.get('taskId') || '') };
+    if (!(c && c.source === 'google' && c.gcalId)) data.gcal = fd.get('gcal') === 'on';
+    if (!c && date < todayStr()) { toast('今日以降の日付を選んでください'); return; }
+    const snap = snapshot();
+    if (c) {
+      if (c.gcal && data.gcal === false) queueGcalDelete(c, 'off'); // オフにした → Google の予定を消してもらう
+      if (data.gcal) { const gid = cdGcalId(c); if (gid) { state.gcalDeletes = state.gcalDeletes.filter((g) => { if (g.gcalId !== gid) return true; markDeleted(g.id); return false; }); } }
+      Object.assign(c, normCountdown({ ...c, ...data }), { updatedAt: nowIso() }); save(); closeModal(); rerender(); undoable('保存しました', snap);
+    } else { const nc = normCountdown(data); state.countdowns.push(nc); save(); closeModal(); if (route().name !== 'countdown') go('#countdown'); else rerender(); toast(`${nc.emoji} 「${nc.title}」まで ${cdText(cdDays(nc))}${nc.gcal ? '（Googleカレンダーへは明日の朝）' : ''}`); }
+  }
+  function deleteCountdown(id) {
+    const c = getCountdown(id); if (!c) return;
+    const snap = snapshot();
+    if (c.gcal) queueGcalDelete(c, 'deleted');
+    state.countdowns = state.countdowns.filter((x) => x.id !== id);
+    markDeleted(id); save(); if (!backdrop.hidden) closeModal(); rerender(); undoable(`「${trunc(c.title, 16)}」を削除しました`, snap);
+  }
+  function countdownContext() {
+    const { up } = sortedCountdowns();
+    if (!up.length) return '';
+    return '## カウントダウン（大きな予定・目標の日）\n' + up.slice(0, 8).map((c) => `- ${c.emoji} ${trunc(c.title, 24)}：${c.date}（${cdText(cdDays(c))}）${c.taskId && getItem(c.taskId) ? `・関連タスク「${trunc(getItem(c.taskId).title, 20)}」` : ''}`).join('\n');
+  }
+  // 0時をまたいだら数え直す
+  let cdDay = todayStr();
+  function checkDayRollover() {
+    const t = todayStr();
+    if (t === cdDay) return false;
+    cdDay = t;
+    if (backdrop.hidden) rerenderSoft();
+    return true;
+  }
+  setInterval(checkDayRollover, 30000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkDayRollover(); });
+  document.addEventListener('input', (e) => {
+    if (e.target.matches && e.target.matches('form[data-form=countdown] input[name=date]')) { const p = $('#cdPreview'); if (p) p.textContent = cdPreviewText(e.target.value); }
+  });
+
   // ───────────────────────── アクション ─────────────────────────
   function stepOf(d) { const i = getItem(d.id); return i ? [i, i.steps.find((s) => s.id === d.step)] : [null, null]; }
   const actions = {
@@ -3353,6 +3580,12 @@
     toggleJDay: (d, el) => toggleJournalDay(d.date, el),
     viewPhoto: (d) => viewPhoto(d.photoId, d.entry),
     removeEditorPhoto: (d) => removeEditorPhoto(d.photoId),
+    cdNew: () => openCountdownEditor(),
+    cdEdit: (d) => openCountdownEditor(d.id),
+    cdDelete: (d) => deleteCountdown(d.id),
+    cdFromEvent: (d) => countdownFromEvent(d.id),
+    cdEmoji: (d) => { const inp = $('form[data-form=countdown] input[name=emoji]', modalBox); if (inp) inp.value = d.v; },
+    cdQuick: (d) => { const inp = $('form[data-form=countdown] input[name=date]', modalBox); if (!inp) return; inp.value = addMonthsStr(todayStr(), Number(d.m) || 1); const p = $('#cdPreview'); if (p) p.textContent = cdPreviewText(inp.value); },
     aiSugMove: (d) => moveSuggestion(d.id),
     aiSugDismiss: (d) => dismissSuggestion(d.id),
     aiSugReopen: (d) => reopenSuggestion(d.id),
@@ -3489,6 +3722,7 @@
       case 'lesson': submitLesson(f); break;
       case 'journal': submitJournal(f); break;
       case 'habit': submitHabit(f); break;
+      case 'countdown': submitCountdown(f); break;
       case 'syncSetup': testConnection(f); break;
       case 'photoJournal': submitPhotoJournal(f); break;
       case 'obsidianPaste': submitObsidianPaste(f); break;
@@ -3607,5 +3841,5 @@
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') setTimeout(() => maybeDailyAnalysis(), 800); });
 
   // テスト・デバッグ用（読み取りのみ）
-  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, pomu: (h, today) => { const i = pomuInfo(normHabit(h), today); return { key: i.key, name: i.name, route: i.route, lv: i.lv, total: i.total, M: i.M, streak: i.streak, best: i.best, hints: i.hints }; }, pomuChangeMsg, syncNow: () => syncNow(), topPomu: () => { const p = topPomu(); return { key: p.key, lv: p.lv, id: p.h ? p.h.id : '' }; }, photoIds: async () => (await photoAll()).map((r) => r.id).sort(), photoInfo: async (id) => { const r = await photoGet(id); return r ? { id: r.id, bytes: r.full.byteLength, synced: !!r.synced } : null; }, syncPhotos: () => syncPhotos(), photoGc: () => photoGc(), aiDaily: () => ({ ...aiDaily, manualLeft: manualLeft(), busy: anaUi.busy, error: anaUi.error, daily: aiDailyOn(), autoMove: aiAutoMoveOn() }), parseAnalysis, maybeDailyAnalysis: () => maybeDailyAnalysis(), runAnalysis: () => runAnalysis(true), photoDims: async (id) => { const r = await photoGet(id); if (!r) return null; const b = await createImageBitmap(new Blob([r.full], { type: 'image/jpeg' })); return [b.width, b.height, r.full.byteLength]; } };
+  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, pomu: (h, today) => { const i = pomuInfo(normHabit(h), today); return { key: i.key, name: i.name, route: i.route, lv: i.lv, total: i.total, M: i.M, streak: i.streak, best: i.best, hints: i.hints }; }, pomuChangeMsg, syncNow: () => syncNow(), topPomu: () => { const p = topPomu(); return { key: p.key, lv: p.lv, id: p.h ? p.h.id : '' }; }, photoIds: async () => (await photoAll()).map((r) => r.id).sort(), photoInfo: async (id) => { const r = await photoGet(id); return r ? { id: r.id, bytes: r.full.byteLength, synced: !!r.synced } : null; }, syncPhotos: () => syncPhotos(), photoGc: () => photoGc(), aiDaily: () => ({ ...aiDaily, manualLeft: manualLeft(), busy: anaUi.busy, error: anaUi.error, daily: aiDailyOn(), autoMove: aiAutoMoveOn() }), analysisContext: () => analysisContext(), checkDayRollover: () => checkDayRollover(), get calendar() { return cal; }, pullCalendar: () => pullCalendar(), parseAnalysis, maybeDailyAnalysis: () => maybeDailyAnalysis(), runAnalysis: () => runAnalysis(true), photoDims: async (id) => { const r = await photoGet(id); if (!r) return null; const b = await createImageBitmap(new Blob([r.full], { type: 'image/jpeg' })); return [b.width, b.height, r.full.byteLength]; } };
 })();

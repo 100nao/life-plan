@@ -662,7 +662,7 @@ with sync_playwright() as p:
     check('v2：タブにない画面ではインジケーターを隠す', ind()[2] if pg.locator('.tabbar a.active').count() == 0 or not pg.evaluate("document.querySelector('.tabbar a.active').offsetParent") else True)
     # ドロワー
     pg.click('#menuBtn'); wait_idle(pg, 550)
-    check('v2：ドロワーを開く', pg.evaluate("document.body.classList.contains('drawer-open')") and pg.locator('#drawer .drawer-nav a').count() == 12 and pg.get_attribute('#menuBtn', 'aria-expanded') == 'true')
+    check('v2：ドロワーを開く', pg.evaluate("document.body.classList.contains('drawer-open')") and pg.locator('#drawer .drawer-nav a').count() == 13 and pg.get_attribute('#menuBtn', 'aria-expanded') == 'true')
     check('v2：ドロワーで現在地を表示', pg.locator('#drawer a.active[data-nav=later]').count() == 1)
     shot(pg, 'sp_drawer_v2.png')
     pg.click('#drawer a[data-nav=lessons]'); wait_idle(pg, 550)
@@ -696,7 +696,7 @@ with sync_playwright() as p:
     def dd(n): return (TD - datetime.timedelta(days=n)).isoformat()
     def pomu(done, start, today=None):
         return pg.evaluate("([d, s, t]) => LifePlan.pomu({id: 'x', name: 't', startDate: s, done: d}, t)", [done, start, today or TD.isoformat()])
-    check('バージョン 1.4.0', S(pg, 'LifePlan.version') == '1.4.0')
+    check('バージョン 1.5.0', S(pg, 'LifePlan.version') == '1.5.0')
     check('習慣：state.habits が配列', S(pg, 'Array.isArray(LifePlan.state.habits)'))
     # ぽむのルール
     r = pomu([], dd(0)); check('ぽむ：0日はたまご（stage-1）', r['key'] == 'stage-1' and r['lv'] == 1, r)
@@ -983,7 +983,7 @@ with sync_playwright() as p:
     db = pg.locator('#drawer').bounding_box()
     check('スワイプ：右から左へなぞるとメニューが開く', is_open() and pg.is_visible('#drawerBackdrop'))
     check('スワイプ：メニューは右側から出る', db and abs(db['x'] + db['width'] - 390) <= 2 and db['x'] > 30, db)
-    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.4.0' in pg.inner_text('#drawer [data-action=forceUpdate]'))
+    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.5.0' in pg.inner_text('#drawer [data-action=forceUpdate]'))
     shot(pg, 'v131_menu.png')
     swipe(90, 500, 330, 505)
     check('スワイプ：左から右へで閉じる', not is_open())
@@ -1294,6 +1294,160 @@ with sync_playwright() as p:
     rem = gh.get_json('data/life-plan.json')['data']
     check('同期：aiSuggestions・aiAnalyses も保存', any(s['id'] == 'sug:coach:2026-11-02-t:0' and s['status'] == 'moved' for s in rem.get('aiSuggestions', [])) and 'aiAnalyses' in rem)
     pg.evaluate("location.hash = '#home'"); wait_idle(pg, 300)
+    # ── v1.5.0：⏳ カウントダウン ──
+    cc = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2, locale='ja-JP', timezone_id='Asia/Tokyo', service_workers='block')
+    cp = cc.new_page(); cp.on('pageerror', lambda e: errors.append('CD ' + str(e)))
+    cp.goto(URL); wait_idle(cp, 400)
+    cp.evaluate(f"localStorage.setItem('lifeplan.v1', JSON.stringify({json.dumps(seed, ensure_ascii=False)}))")
+    cp.reload(); wait_idle(cp, 500)
+    def tdp(n): return (TD + datetime.timedelta(days=n)).isoformat()
+    cp.evaluate("location.hash = '#countdown'"); wait_idle(cp, 400)
+    check('カウントダウン：画面と空の案内', '⏳ カウントダウン' in cp.inner_text('#main') and 'まだカウントダウンはありません' in cp.inner_text('#main'))
+    cp.click('#main [data-action=cdNew] >> nth=0'); wait_idle(cp, 400)
+    check('追加：日付は未来だけ（min=今日）', cp.get_attribute('form[data-form=countdown] input[name=date]', 'min') == TD.isoformat() and cp.get_attribute('form[data-form=countdown] input[name=date]', 'type') == 'date')
+    cp.click('[data-action=cdQuick][data-m="12"]'); wait_idle(cp, 150)
+    yv = cp.input_value('form[data-form=countdown] input[name=date]')
+    check('追加：かんたん選択「1年後」', yv[:4] == str(TD.year + 1) and 'あと' in cp.inner_text('#cdPreview'), yv)
+    cp.fill('form[data-form=countdown] input[name=title]', '役員発表')
+    cp.fill('form[data-form=countdown] input[name=date]', '2027-03-15'); wait_idle(cp, 150)
+    NB = (datetime.date(2027, 3, 15) - TD).days
+    check('追加：日付を選ぶと「あと N 日」を表示', f'あと{NB}日' in cp.inner_text('#cdPreview') and '2027年3月15日（月）' in cp.inner_text('#cdPreview'), cp.inner_text('#cdPreview'))
+    cp.click('[data-action=cdEmoji][data-v="🎤"]')
+    cp.fill('form[data-form=countdown] textarea[name=memo]', '資料は2週間前に完成させる')
+    cp.select_option('form[data-form=countdown] select[name=taskId]', 'pp')
+    cp.click('form[data-form=countdown] button[type=submit]'); wait_idle(cp, 400)
+    c0 = S(cp, 'LifePlan.state.countdowns[0]')
+    check('追加：保存（title・emoji・date・memo・taskId）', c0['title'] == '役員発表' and c0['emoji'] == '🎤' and c0['date'] == '2027-03-15' and c0['memo'].startswith('資料') and c0['taskId'] == 'pp' and c0['gcal'] is False and c0['source'] == '', c0)
+    card = cp.locator(f'.cd-card[data-cd="{c0["id"]}"]')
+    check('カード：大きく「あと N 日」と曜日つきの日付', card.locator('.cd-num').inner_text().replace(',', '') == str(NB) and '2027年3月15日（月）' in card.inner_text())
+    check('カード：関連タスクへのリンク', card.locator('a[href="#item/pp"]').count() == 1)
+    check('カード：進み具合のバー（作成日〜目標日）', card.locator('.cd-bar[role=progressbar]').get_attribute('aria-valuenow') == '0')
+    # 今日・過去・近い順・進み具合
+    cds = S(cp, 'LifePlan.state.countdowns')
+    cds += [{'id': 'cdtoday', 'title': '健康診断', 'emoji': '🏃', 'date': TD.isoformat(), 'createdAt': now, 'updatedAt': now},
+            {'id': 'cdpast', 'title': 'TOEIC', 'emoji': '📝', 'date': tdp(-5), 'createdAt': now, 'updatedAt': now},
+            {'id': 'cdhalf', 'title': '旅行の予約しめきり', 'emoji': '✈️', 'date': tdp(10), 'createdAt': (datetime.datetime.combine(TD - datetime.timedelta(days=10), datetime.time(12)) - datetime.timedelta(hours=9)).isoformat() + 'Z', 'updatedAt': now},
+            {'id': 'cdxmas', 'title': 'クリスマス会', 'emoji': '🎉', 'date': tdp(40), 'createdAt': now, 'updatedAt': now}]
+    cp.evaluate(f"(() => {{ const s = JSON.parse(localStorage.getItem('lifeplan.v1')); s.countdowns = {json.dumps(cds, ensure_ascii=False)}; localStorage.setItem('lifeplan.v1', JSON.stringify(s)); }})()"); cp.reload(); wait_idle(cp, 500)
+    order = cp.evaluate("[...document.querySelectorAll('#main > .cd-card')].map(e => e.dataset.cd)")
+    check('並び：近い順（今日 → 10日後 → 40日後 → 役員発表）', order == ['cdtoday', 'cdhalf', 'cdxmas', c0['id']], order)
+    check('今日：「今日！」', '今日！' in cp.inner_text('.cd-card[data-cd=cdtoday]'))
+    check('進み具合：作成日から半分で 50%', cp.get_attribute('.cd-card[data-cd=cdhalf] .cd-bar', 'aria-valuenow') == '50')
+    check('過去：「N日経過」で「終わった予定」へ', cp.locator('.cd-past-wrap .cd-card[data-cd=cdpast]').count() == 1 and '5' in cp.locator('.cd-card[data-cd=cdpast] .cd-num').text_content() and '日経過' in cp.locator('.cd-card[data-cd=cdpast]').text_content() and '終わった予定（1件）' in cp.inner_text('.cd-past-wrap summary'))
+    cp.evaluate('window.scrollTo(0,0)'); shot(cp, 'v150_countdown.png')
+    # 編集（元に戻す）
+    cp.click(f'.cd-card[data-cd="{c0["id"]}"] [data-action=cdEdit]'); wait_idle(cp, 300)
+    check('編集：今の値が入っている', cp.input_value('form[data-form=countdown] input[name=title]') == '役員発表' and cp.input_value('form[data-form=countdown] input[name=date]') == '2027-03-15')
+    cp.fill('form[data-form=countdown] input[name=title]', '役員発表（本番）'); cp.click('form[data-form=countdown] button[type=submit]'); wait_idle(cp, 400)
+    check('編集：保存', S(cp, f"LifePlan.state.countdowns.find(c => c.id === '{c0['id']}').title") == '役員発表（本番）')
+    cp.click('#toast .toast-btn'); wait_idle(cp, 300)
+    check('編集：元に戻せる', S(cp, f"LifePlan.state.countdowns.find(c => c.id === '{c0['id']}').title") == '役員発表')
+    # 削除（元に戻す）
+    cp.click('.cd-card[data-cd=cdxmas] [data-action=cdDelete]'); wait_idle(cp, 300)
+    check('削除', not S(cp, "LifePlan.state.countdowns.some(c => c.id === 'cdxmas')") and S(cp, "!!LifePlan.state.deleted['cdxmas']"))
+    cp.click('#toast .toast-btn'); wait_idle(cp, 300)
+    check('削除：元に戻せる', S(cp, "LifePlan.state.countdowns.some(c => c.id === 'cdxmas')") and cp.locator('.cd-card[data-cd=cdxmas]').count() == 1)
+    # ホーム：近い順に最大3件
+    cp.evaluate("location.hash = '#home'"); wait_idle(cp, 400)
+    rows = cp.locator('.cd-home .cd-mini li')
+    check('ホーム：近い3件をコンパクトに', rows.count() == 3 and '健康診断' in rows.nth(0).inner_text() and '今日！' in rows.nth(0).inner_text() and 'あと10日' in rows.nth(1).inner_text().replace('\n', '') and '役員発表' not in cp.inner_text('.cd-home'))
+    check('ホーム：画面へのリンク', cp.locator('.cd-home a[href="#countdown"]').count() >= 1)
+    cp.evaluate('window.scrollTo(0,0)'); shot(cp, 'v150_home.png')
+    # Gemini の分析の要約にも入る
+    ctxt = cp.evaluate('LifePlan.analysisContext()')
+    check('分析：カウントダウンも要約に入れる', '## カウントダウン' in ctxt and '役員発表：2027-03-15' in ctxt and f'あと{NB}日' in ctxt and 'TOEIC' not in ctxt, ctxt[:300])
+    # 0時をまたぐと数え直す（端末のローカル日付）
+    cp.evaluate("""(() => { const RD = Date; const n = new RD(); const next = new RD(n.getFullYear(), n.getMonth(), n.getDate() + 1, 0, 0, 30).getTime(); const off = next - RD.now();
+      class FD extends RD { constructor(...a) { if (a.length) super(...a); else super(RD.now() + off); } static now() { return RD.now() + off; } }
+      window.Date = FD; })()""")
+    cp.evaluate("location.hash = '#countdown'"); wait_idle(cp, 300)
+    check('0時：日付が変わったら数え直す', cp.evaluate('LifePlan.checkDayRollover()') is True)
+    wait_idle(cp, 300)
+    check('0時：翌日は「あと N-1 日」・今日だった予定は「1日経過」', cp.locator(f'.cd-card[data-cd="{c0["id"]}"] .cd-num').inner_text().replace(',', '') == str(NB - 1) and '日経過' in cp.locator('.cd-card[data-cd=cdtoday]').text_content() and cp.locator('.cd-past-wrap .cd-card[data-cd=cdtoday]').count() == 1)
+    cc.close()
+
+    # ── v1.5.0：Googleカレンダー（コーチが書いたファイルを読むだけ）──
+    npc = S(pg, 'LifePlan.state.countdowns.length')
+    pg.evaluate("location.hash = '#countdown'"); wait_idle(pg, 300)
+    check('カレンダー：未着の案内', 'Googleカレンダーはまだ届いていません' in pg.inner_text('#main'))
+    # アプリで作る → 「Googleカレンダーにも入れる」
+    pg.click('#main [data-action=cdNew] >> nth=0'); wait_idle(pg, 300)
+    pg.fill('form[data-form=countdown] input[name=title]', '役員発表'); pg.fill('form[data-form=countdown] input[name=date]', '2027-03-15')
+    pg.check('form[data-form=countdown] input[name=gcal]'); pg.click('form[data-form=countdown] button[type=submit]'); wait_idle(pg, 400)
+    yid = S(pg, "LifePlan.state.countdowns.find(c => c.title === '役員発表').id")
+    check('Googleへ：gcal:true で保存・「明日の朝に同期されます」', S(pg, f"LifePlan.state.countdowns.find(c => c.id === '{yid}').gcal") is True and '明日の朝に同期されます' in pg.inner_text(f'.cd-card[data-cd="{yid}"]'))
+    pg.click('#main [data-action=cdNew] >> nth=0'); wait_idle(pg, 300)
+    pg.fill('form[data-form=countdown] input[name=title]', '引っ越し'); pg.fill('form[data-form=countdown] input[name=date]', tdp(60)); pg.check('form[data-form=countdown] input[name=gcal]'); pg.click('form[data-form=countdown] button[type=submit]'); wait_idle(pg, 400)
+    mid = S(pg, "LifePlan.state.countdowns.find(c => c.title === '引っ越し').id")
+    pg.evaluate('LifePlan.syncNow()'); pg.wait_for_timeout(1500)
+    rem = gh.get_json('data/life-plan.json')['data']
+    check('同期：countdowns を保存（gcal フラグつき）', any(c['id'] == yid and c['gcal'] is True and c['date'] == '2027-03-15' and c['gcalId'] == '' for c in rem.get('countdowns', [])))
+    # コーチが calendar.json と calendar-links.json を書いた
+    T0 = datetime.datetime.combine(TD, datetime.time(7, 0)) - datetime.timedelta(hours=9)
+    calj = {'updatedAt': T0.isoformat() + 'Z', 'events': [
+        {'id': 'ev_today', 'title': '歯医者', 'start': f'{TD.isoformat()}T10:30:00+09:00', 'end': f'{TD.isoformat()}T11:00:00+09:00', 'allDay': False, 'location': '駅前クリニック'},
+        {'id': 'ev_tmr', 'title': '1on1', 'start': f'{tdp(1)}T15:00:00+09:00', 'end': f'{tdp(1)}T15:30:00+09:00', 'allDay': False},
+        {'id': 'ev_wk', 'title': '母の誕生日', 'start': tdp(5), 'end': tdp(6), 'allDay': True},
+        {'id': 'ev_far', 'title': '株主総会', 'start': tdp(30), 'end': tdp(31), 'allDay': True},
+        {'id': 'ev_hg', 'title': '⏳ マラソン大会', 'start': tdp(200), 'end': tdp(201), 'allDay': True, 'location': '皇居'},
+        {'id': 'ev_mine', 'title': '⏳ 役員発表', 'start': '2027-03-15', 'end': '2027-03-16', 'allDay': True}]}
+    links = {'links': {yid: {'gcalId': 'ev_mine', 'syncedAt': datetime.datetime.now(datetime.UTC).replace(tzinfo=None).isoformat() + 'Z'}}, 'deleted': {}}
+    gh.set('data/calendar.json', json.dumps(calj, ensure_ascii=False)); gh.set('data/calendar-links.json', json.dumps(links, ensure_ascii=False))
+    nputs = len(gh.puts)
+    pg.evaluate('LifePlan.syncNow()'); wait_js(pg, "!!(LifePlan.calendar.calendar && LifePlan.calendar.links)", 8000); wait_idle(pg, 400)
+    check('カレンダー：読み込み（GET のみ・アプリは書かない）', not any('calendar' in p_ for p_, _ in gh.puts) and not any(c.startswith(('PUT', 'DELETE')) and 'calendar' in c for c in gh.calls))
+    check('カレンダー：最終同期の表示', 'Googleカレンダー最終同期: ' + f'{TD.month}/{TD.day} 7:00' in pg.inner_text('#main'), pg.inner_text('.cal-sync'))
+    check('⏳ つきの予定は自動でカウントダウン（Google バッジ・読み取り専用）', pg.locator('.cd-card[data-cd="gcal:ev_hg"]').count() == 1 and 'Google' in pg.inner_text('.cd-card[data-cd="gcal:ev_hg"] .g-badge')
+          and 'マラソン大会' in pg.inner_text('.cd-card[data-cd="gcal:ev_hg"]') and '⏳ マラソン' not in pg.inner_text('.cd-card[data-cd="gcal:ev_hg"] .cd-title') and pg.locator('.cd-card[data-cd="gcal:ev_hg"] [data-action=cdEdit]').count() == 0
+          and S(pg, 'LifePlan.state.countdowns.length') == npc + 2)
+    check('アプリから送った予定（⏳ 役員発表）は重ねて出さない', pg.locator('.cd-card[data-cd="gcal:ev_mine"]').count() == 0 and '同期済み' in pg.inner_text(f'.cd-card[data-cd="{yid}"]'))
+    check('まだリンクがないものは「明日の朝に同期されます」', '明日の朝に同期されます' in pg.inner_text(f'.cd-card[data-cd="{mid}"]'))
+    pg.click('.cal-events summary'); wait_idle(pg, 200)
+    check('Google の予定一覧（⏳ なし）', pg.locator('.cal-ev').count() == 4 and pg.locator('.cal-ev[data-gev=ev_far] [data-action=cdFromEvent]').count() == 1)
+    pg.click('.cal-ev[data-gev=ev_far] [data-action=cdFromEvent]'); wait_idle(pg, 400)
+    fc = S(pg, "LifePlan.state.countdowns.find(c => c.gcalId === 'ev_far')")
+    check('→ カウントダウンにする（gcalId でつなぐ）', fc and fc['title'] == '株主総会' and fc['source'] == 'google' and fc['date'] == tdp(30) and pg.locator(f'.cd-card[data-cd="{fc["id"]}"]').count() == 1)
+    check('→ 2回目は作らない（カウントダウン中）', pg.locator('.cal-ev[data-gev=ev_far] [data-action=cdFromEvent]').count() == 0 and 'カウントダウン中' in pg.text_content('.cal-ev[data-gev=ev_far]') and pg.locator('.cal-events[open]').count() == 1)
+    pg.evaluate("location.hash = '#countdown'"); pg.evaluate('window.scrollTo(0,0)'); wait_idle(pg, 300)
+    shot(pg, 'v150_calendar.png')
+    # 変更：updatedAt > syncedAt なら「変更は明日の朝に反映」
+    pg.click(f'.cd-card[data-cd="{yid}"] [data-action=cdEdit]'); wait_idle(pg, 300)
+    pg.fill('form[data-form=countdown] textarea[name=memo]', '会場：本社'); pg.click('form[data-form=countdown] button[type=submit]'); wait_idle(pg, 400)
+    check('変更：同期済みでも「変更は明日の朝に反映されます」', '変更は明日の朝に反映されます' in pg.inner_text(f'.cd-card[data-cd="{yid}"]'))
+    # 削除：Google の予定の削除依頼（gcalDeletes）
+    pg.click(f'.cd-card[data-cd="{yid}"] [data-action=cdDelete]'); wait_idle(pg, 400)
+    gd = S(pg, 'LifePlan.state.gcalDeletes')
+    check('削除：Google の予定を消す依頼を残す', len(gd) == 1 and gd[0]['gcalId'] == 'ev_mine' and gd[0]['countdownId'] == yid and gd[0]['id'] == 'gdel:ev_mine' and gd[0]['reason'] == 'deleted')
+    pg.click('#toast .toast-btn'); wait_idle(pg, 400)
+    check('削除：元に戻すと依頼も取り消し', S(pg, 'LifePlan.state.gcalDeletes.length') == 0 and S(pg, f"LifePlan.state.countdowns.some(c => c.id === '{yid}')"))
+    pg.click(f'.cd-card[data-cd="{yid}"] [data-action=cdDelete]'); wait_idle(pg, 400)
+    # Google から作ったものは、削除しても Google の予定は消さない
+    pg.click(f'.cd-card[data-cd="{fc["id"]}"] [data-action=cdDelete]'); wait_idle(pg, 400)
+    check('Google から作ったものは Google 側を消さない', S(pg, 'LifePlan.state.gcalDeletes.length') == 1)
+    # オフにした → 削除依頼（reason: off）
+    links['links'][mid] = {'gcalId': 'ev_move', 'syncedAt': datetime.datetime.now(datetime.UTC).replace(tzinfo=None).isoformat() + 'Z'}
+    gh.set('data/calendar-links.json', json.dumps(links, ensure_ascii=False))
+    pg.evaluate('LifePlan.syncNow()'); pg.wait_for_timeout(1500)
+    check('リンクが届くと「同期済み」', '📅 同期済み' in pg.inner_text(f'.cd-card[data-cd="{mid}"]') and '変更は' not in pg.inner_text(f'.cd-card[data-cd="{mid}"]'))
+    pg.click(f'.cd-card[data-cd="{mid}"] [data-action=cdEdit]'); wait_idle(pg, 300)
+    pg.uncheck('form[data-form=countdown] input[name=gcal]'); pg.click('form[data-form=countdown] button[type=submit]'); wait_idle(pg, 400)
+    check('オフにすると削除依頼（reason: off）', any(g['gcalId'] == 'ev_move' and g['reason'] == 'off' for g in S(pg, 'LifePlan.state.gcalDeletes')))
+    pg.wait_for_timeout(3500); pg.evaluate('LifePlan.syncNow()'); pg.wait_for_timeout(1500)
+    rem = gh.get_json('data/life-plan.json')['data']
+    check('同期：gcalDeletes を保存（コーチが読む）', {g['gcalId'] for g in rem.get('gcalDeletes', [])} == {'ev_mine', 'ev_move'})
+    # コーチが Google から消した → deleted に書く → アプリは依頼を片付ける
+    links['deleted'] = {'ev_mine': datetime.datetime.now(datetime.UTC).replace(tzinfo=None).isoformat() + 'Z', 'ev_move': datetime.datetime.now(datetime.UTC).replace(tzinfo=None).isoformat() + 'Z'}
+    del links['links'][yid]; del links['links'][mid]
+    calj['events'] = [e for e in calj['events'] if e['id'] != 'ev_mine']
+    gh.set('data/calendar-links.json', json.dumps(links, ensure_ascii=False)); gh.set('data/calendar.json', json.dumps(calj, ensure_ascii=False))
+    pg.evaluate('LifePlan.syncNow()'); wait_js(pg, "LifePlan.state.gcalDeletes.length === 0", 8000)
+    check('削除済みが届くと依頼を片付ける', S(pg, 'LifePlan.state.gcalDeletes.length') == 0 and S(pg, "!!LifePlan.state.deleted['gdel:ev_mine']"))
+    # ホーム：これからの予定（7日間）
+    pg.evaluate("location.hash = '#home'"); wait_idle(pg, 400)
+    sh = pg.inner_text('.sched-home')
+    check('ホーム：これからの予定（7日以内のみ）', pg.locator('.sched-home .sched-row').count() == 3 and '歯医者' in sh and '10:30' in sh and '明日' in sh and '1on1' in sh and '母の誕生日' in sh and '終日' in sh and '株主総会' not in sh and 'マラソン' not in sh)
+    check('ホーム：⏳ の予定はカウントダウンに', 'マラソン大会' in pg.inner_text('.cd-home'))
+    pg.evaluate("location.hash = '#home'"); wait_idle(pg, 200)
     # ── PC ──
     state_dump = pg.evaluate("localStorage.getItem('lifeplan.v1')")
     # ── Service Worker・オフライン（別コンテキスト：同期のモックと分けるため）──
@@ -1319,7 +1473,7 @@ with sync_playwright() as p:
     nav = sp.evaluate("performance.getEntriesByType('navigation')[0].name")
     check('アップデート：?v=<時刻> で読み込み直す', re.search(r'[?&]v=\d{10,}', nav) is not None and sp.evaluate('window.__beforeUpdate') is None, nav)
     check('アップデート：古いキャッシュを削除', 'lifeplan-old-test' not in sp.evaluate('caches.keys()'))
-    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.4.0' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
+    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.5.0' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
     check('アップデート：Service Worker は引き続き有効', sp.evaluate("navigator.serviceWorker.getRegistration().then(r => !!(r && r.active))"))
     swc.set_offline(True)
     sp.reload(); wait_idle(sp, 1200)

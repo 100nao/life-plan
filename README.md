@@ -52,6 +52,9 @@
 - **v1.4.0**
   - **✨ 毎日の分析**：Gemini がその日はじめて開いたときに1回、タスク・日記・習慣・習い事の要約を分析（要約・気づき・タスクの提案）。ホームにカード
   - **🤖 AI提案（別画面）**：Gemini とコーチの提案はここに並び、「→ 自分のリストへ」で初めて自分のタスクに。自動で移す設定は初期値オフ（くわしくは下の「毎日の分析と AI提案」）
+- **v1.5.0**
+  - **⏳ カウントダウン**：大きな予定・目標の日を選ぶと「あと N 日」を毎日数える（今日は「今日！」、過ぎたら「N日経過」で「終わった予定」へ）。作成日→目標日の進み具合バー、近い順、編集・削除は元に戻せる。ホームに近い3件
+  - **📅 Googleカレンダー連携（コーチ経由）**：アプリは Google にログインしません。毎朝のコーチが `data/calendar.json` / `data/calendar-links.json` を書き、アプリは読むだけ（くわしくは下の「Googleカレンダー連携」）
 - どこからでも ＋ でクイック追加、検索、完了履歴、取り消し（元に戻す）、JSON の書き出し／読み込み、ダークモード
 
 ## GitHub 同期（AIコーチ連携）— 最初の1回だけ
@@ -121,6 +124,53 @@
 - 既存の未完了タスク・未処理の提案と同じ（またはほぼ同じ）タイトルの提案は作りません。
 - 端末ごとの設定（`lifeplan.ai` の `daily` / `autoMove`）と、その日の実行記録（`lifeplan.aiDaily`）は同期しません。分析結果（`aiAnalyses`、1日1件・最新30日）と提案（`aiSuggestions`）は同期します。
 
+### ⏳ カウントダウン（v1.5.0）
+- ☰ メニュー・PC のサイドバー →「⏳ カウントダウン」。＋ 追加で、予定・目標名、絵文字、日付（今日以降。「1か月後」〜「1年後」のかんたん選択つき）、メモ、関連するタスク・目標（任意）を入れます。
+- 日数は **端末のローカル日付**（日本なら JST）で数え、0時をまたぐと自動で数え直します（「あと N 日」→ 当日「今日！」→ 翌日から「N日経過」で「終わった予定」へ）。
+- 進み具合バーは **作成日 → 目標日** の経過割合です。
+- 毎日の Gemini 分析の要約にも、近いカウントダウン（最大8件）が入ります。
+
+### 📅 Googleカレンダー連携（v1.5.0）— アプリは読むだけ、書くのは毎朝のコーチ
+アプリ自体は Google にログインしません（キーもトークンも持ちません）。毎朝 7:00 ごろ（JST）のコーチが Google カレンダー（オーナーのアカウント）を読み書きし、**非公開のデータリポジトリ**に次の2ファイルを書きます。アプリは GitHub 同期のたびに **GET で読むだけ** で、この2ファイルには一切書き込みません（ファイルがなければ何もしません）。パスは `data/life-plan.json` と同じフォルダです。
+
+**コーチの毎朝の手順**
+1. `data/life-plan.json` の `data.countdowns` を読む。
+2. `gcal: true` で、`data/calendar-links.json` の `links[<countdown id>]` がまだないもの → Google に **終日予定「⏳ <title>」**（日付 = `date`、説明 = `memo`）を作り、`links[<countdown id>] = { "gcalId": "<作った予定の id>", "syncedAt": "<今の ISO 時刻>" }` を書く。
+3. `links` にあるもので `countdown.updatedAt > links[id].syncedAt` → Google の予定（タイトル「⏳ <title>」・日付・説明）を更新し、`syncedAt` を今に。
+4. `data.gcalDeletes[]`（下記）にある `gcalId` の予定を Google から削除し、`calendar-links.json` の `deleted[<gcalId>] = "<削除した ISO 時刻>"` を書き、`links` から該当の countdown id を外す。アプリは `deleted` に載った依頼を自動で片付けます。
+5. `source: "google"` のカウントダウン（Google の予定から作ったもの）は、Google 側を変更・削除しない（読むだけ）。
+6. 最後に `data/calendar.json` を書き直す（今日から約90日間の予定 ＋ タイトルに「⏳」を含む2年先までの予定）。
+
+**`data/calendar.json`（コーチだけが書く）**
+```json
+{
+  "updatedAt": "2026-11-02T07:00:00+09:00",
+  "events": [
+    { "id": "<Google の event id>", "title": "歯医者", "start": "2026-11-02T10:30:00+09:00", "end": "2026-11-02T11:00:00+09:00", "allDay": false, "location": "駅前クリニック" },
+    { "id": "<Google の event id>", "title": "⏳ 役員発表", "start": "2027-03-15", "end": "2027-03-16", "allDay": true }
+  ]
+}
+```
+- `start` / `end` は終日なら `YYYY-MM-DD`（`end` は Google と同じく翌日・含まない）、時刻つきならタイムゾーンつき ISO。`location` は任意。
+- アプリでの表示：ホーム「📅 これからの予定」（今日から7日間・最大6件）、カウントダウン画面の「📅 Googleカレンダーの予定」一覧（各予定に「→ カウントダウンにする」）、「Googleカレンダー最終同期: <updatedAt>」。
+- タイトルに **「⏳」を含む予定** は、自動でカウントダウンとして並びます（Google バッジ・読み取り専用・アプリには保存しない）。ただし、アプリのカウントダウンとつながっている予定（`links` の `gcalId`、またはカウントダウンの `gcalId`）は重ねて出しません。
+- 「→ カウントダウンにする」で、`source: "google"`・`gcalId: "<event id>"` のカウントダウンを作ります（同じ予定から2つは作りません）。
+
+**`data/calendar-links.json`（コーチだけが書く）**
+```json
+{
+  "links": { "<countdown id>": { "gcalId": "<Google の event id>", "syncedAt": "2026-11-02T07:00:05+09:00" } },
+  "deleted": { "<Google の event id>": "2026-11-02T07:00:06+09:00" }
+}
+```
+- アプリの表示：`gcal: true` でリンクなし →「📅 明日の朝に同期されます」、リンクあり →「📅 同期済み」、リンクありで `updatedAt > syncedAt` →「📅 同期済み・変更は明日の朝に反映されます」。
+
+**アプリが書くフィールド（`data/life-plan.json` の `data`）**
+- `countdowns[].gcal`：`true` なら「📅 Googleカレンダーにも入れる」がオン。
+- `countdowns[].updatedAt`：編集すると更新（`syncedAt` と比べて更新の要否を判断）。
+- `gcalDeletes[]`：Google から消してほしい予定。カウントダウンを削除したとき、または「Googleカレンダーにも入れる」をオフにしたときに追加（`source: "google"` のものは追加しない）。「元に戻す」で取り消されます。
+  `{ "id": "gdel:<gcalId>", "gcalId": "…", "countdownId": "…", "title": "…", "date": "YYYY-MM-DD", "reason": "deleted | off", "createdAt": "…", "updatedAt": "…" }`
+
 ## データ形式
 
 ### `data/life-plan.json`（アプリが書く・AIコーチが読む）
@@ -145,6 +195,8 @@
     "habits": [{ "id": "…", "emoji": "📚", "name": "英語5分", "startDate": "2026-10-24", "done": ["2026-10-24", "2026-10-25"], "missed": ["2026-10-26"], "seen": "stage-2", "unlocked": ["stage-1", "stage-2"], "createdAt": "…", "updatedAt": "…" }],   // v1.3.0〜。done は〇を押した日、missed（v1.3.1〜）は×を押した日（JST の YYYY-MM-DD・done と重ならない）
     "aiAnalyses": [{ "id": "ana:2026-11-02", "date": "2026-11-02", "summary": "…", "insights": ["…"], "suggestionIds": ["…"], "parsed": true, "model": "gemini-…", "runs": 1, "createdAt": "…", "updatedAt": "…" }],   // v1.4.0〜。1日1件（id は ana:日付）
     "aiSuggestions": [{ "id": "…", "title": "…", "quadrant": "q1 | q2 | q3 | q4", "why": "…", "steps": ["…"], "source": "gemini | coach", "ref": "<分析 or コーチメッセージの id>", "date": "2026-11-02", "status": "open | moved | dismissed", "itemId": "<移したタスクの id>", "auto": false, "createdAt": "…", "updatedAt": "…" }],   // v1.4.0〜。自分のタスクとは別
+    "countdowns": [{ "id": "…", "title": "役員発表", "emoji": "🎤", "date": "2027-03-15", "memo": "", "taskId": "<item id or ''>", "gcal": false, "gcalId": "<Google の event id or ''>", "source": "'' | google | apple", "createdAt": "…", "updatedAt": "…" }],   // v1.5.0〜。date は目標日（ローカル日付）。source：'' アプリで作成 / google Googleの予定から（apple は将来用・未使用）
+    "gcalDeletes": [{ "id": "gdel:<gcalId>", "gcalId": "…", "countdownId": "…", "title": "…", "date": "…", "reason": "deleted | off", "createdAt": "…", "updatedAt": "…" }],   // v1.5.0〜。コーチへの「Google の予定を消して」依頼
     "focus": { "2026": "健康の土台をつくる" },
     "deleted": { "<id>": "<削除日時>", "photo:<photo id>": "<削除日時>" }
   }

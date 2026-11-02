@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.4.0';
+  const APP_VERSION = '1.5.0';
   const DEFAULT_CATEGORIES = ['旅行', '仕事/キャリア', '健康', '家族', '趣味', '学び', 'お金', 'その他'];
   const IMPORTANCE = { high: '高', mid: '中', low: '低' };
   const IMPORTANCE_ORDER = { high: 0, mid: 1, low: 2 };
@@ -98,7 +98,7 @@
 
   // ───────────────────────── 保存 ─────────────────────────
   function defaultState() {
-    return { schema: 2, categories: [...DEFAULT_CATEGORIES], categoriesAt: '', items: [], lessons: [], journal: [], coachNotes: [], habits: [], aiAnalyses: [], aiSuggestions: [], focus: {}, focusAt: {}, deleted: {}, settings: { theme: 'auto', bg: 'mist' } };
+    return { schema: 2, categories: [...DEFAULT_CATEGORIES], categoriesAt: '', items: [], lessons: [], journal: [], coachNotes: [], habits: [], aiAnalyses: [], aiSuggestions: [], countdowns: [], gcalDeletes: [], focus: {}, focusAt: {}, deleted: {}, settings: { theme: 'auto', bg: 'mist' } };
   }
   function normStep(s) {
     if (typeof s === 'string') s = { text: s };
@@ -189,6 +189,19 @@
       createdAt: a.createdAt || t, updatedAt: a.updatedAt || t,
     };
   }
+  // v1.5.0：⏳ カウントダウン。source は将来のカレンダー連携用（'' | 'google' | 'apple'）
+  function normCountdown(c) {
+    const t = nowIso();
+    const o = { id: String(c.id || uid()), title: String(c.title || '').trim() || '（無題）', emoji: String(c.emoji || '⏳'), date: isDateStr(c.date) ? c.date : todayStr(),
+      memo: String(c.memo || ''), taskId: String(c.taskId || ''), gcal: !!c.gcal, gcalId: String(c.gcalId || ''), source: ['google', 'apple'].includes(c.source) ? c.source : '',
+      createdAt: c.createdAt || t, updatedAt: c.updatedAt || t };
+    return o;
+  }
+  // Googleカレンダーから消してほしい予定（コーチが処理して calendar-links.json の deleted に書く）
+  function normGcalDelete(g) {
+    const t = nowIso();
+    return { id: 'gdel:' + String(g.gcalId || ''), gcalId: String(g.gcalId || ''), countdownId: String(g.countdownId || ''), title: String(g.title || ''), date: isDateStr(g.date) ? g.date : '', reason: g.reason === 'off' ? 'off' : 'deleted', createdAt: g.createdAt || t, updatedAt: g.updatedAt || t };
+  }
   function normalizeState(raw) {
     const s = defaultState();
     if (!raw || typeof raw !== 'object') return s;
@@ -200,6 +213,8 @@
     s.habits = (Array.isArray(raw.habits) ? raw.habits : []).filter((h) => h && typeof h === 'object').map(normHabit); // v1.3.0〜（古いデータには無い）
     s.aiAnalyses = (Array.isArray(raw.aiAnalyses) ? raw.aiAnalyses : []).filter((a) => a && typeof a === 'object').map(normAnalysis); // v1.4.0〜
     s.aiSuggestions = (Array.isArray(raw.aiSuggestions) ? raw.aiSuggestions : []).filter((a) => a && typeof a === 'object' && a.title).map(normAiSuggestion);
+    s.countdowns = (Array.isArray(raw.countdowns) ? raw.countdowns : []).filter((c) => c && typeof c === 'object' && c.title).map(normCountdown); // v1.5.0〜
+    s.gcalDeletes = (Array.isArray(raw.gcalDeletes) ? raw.gcalDeletes : []).filter((g) => g && g.gcalId).map(normGcalDelete);
     s.focus = raw.focus && typeof raw.focus === 'object' ? { ...raw.focus } : {};
     s.focusAt = raw.focusAt && typeof raw.focusAt === 'object' ? { ...raw.focusAt } : {};
     s.deleted = raw.deleted && typeof raw.deleted === 'object' ? { ...raw.deleted } : {};
@@ -238,7 +253,7 @@
     const next = normalizeState(JSON.parse(snap));
     const now = nowIso();
     next.deleted = { ...next.deleted, ...prev.deleted };
-    ['items', 'lessons', 'journal', 'coachNotes', 'habits', 'aiAnalyses', 'aiSuggestions'].forEach((k) => {
+    ['items', 'lessons', 'journal', 'coachNotes', 'habits', 'aiAnalyses', 'aiSuggestions', 'countdowns', 'gcalDeletes'].forEach((k) => {
       const prevMap = new Map(prev[k].map((x) => [x.id, JSON.stringify(x)]));
       const nextIds = new Set(next[k].map((x) => x.id));
       next[k].forEach((x) => { if (prevMap.get(x.id) !== JSON.stringify(x)) { x.updatedAt = now; delete next.deleted[x.id]; } });

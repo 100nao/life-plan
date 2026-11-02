@@ -271,6 +271,7 @@
       out[key] = [...map.values()].filter((x) => !(del[x.id] && del[x.id] >= (x.updatedAt || ''))).sort(canonical);
     });
     if ((remote.categoriesAt || '') > (local.categoriesAt || '')) { out.categories = [...remote.categories]; out.categoriesAt = remote.categoriesAt; }
+    out.categories = [...CATEGORIES]; // v1.8.0：カテゴリは2択固定（同期先の古い一覧では戻さない）
     Object.keys(remote.focus).forEach((y) => {
       if (!(y in local.focus) || (remote.focusAt[y] || '') > (local.focusAt[y] || '')) { out.focus[y] = remote.focus[y]; out.focusAt[y] = remote.focusAt[y] || ''; }
     });
@@ -1408,7 +1409,7 @@
   // v1.5.0 の中継ファイル（data/calendar.json / calendar-links.json）読みは、未連携時のフォールバックとして残す。
   const CAL_KEY = 'lifeplan.calendar';
   const calUi = { error: '', open: false };
-  let cal = (() => { try { const o = JSON.parse(localStorage.getItem(CAL_KEY) || '{}'); return { calendar: o.calendar || null, links: o.links || null, fetchedAt: o.fetchedAt || '', calendars: Array.isArray(o.calendars) ? o.calendars : [], calendarsFetchedAt: o.calendarsFetchedAt || '', listError: o.listError || '' }; } catch (e) { return { calendar: null, links: null, fetchedAt: '', calendars: [], calendarsFetchedAt: '', listError: '' }; } })();
+  let cal = (() => { try { const o = JSON.parse(localStorage.getItem(CAL_KEY) || '{}'); return { calendar: o.calendar || null, links: o.links || null, fetchedAt: o.fetchedAt || '', calendars: Array.isArray(o.calendars) ? o.calendars : [], calendarsFetchedAt: o.calendarsFetchedAt || '', listError: o.listError || '', extraEvents: Array.isArray(o.extraEvents) ? o.extraEvents : [], extraRanges: Array.isArray(o.extraRanges) ? o.extraRanges : [], poolFrom: o.poolFrom || '', poolTo: o.poolTo || '' }; } catch (e) { return { calendar: null, links: null, fetchedAt: '', calendars: [], calendarsFetchedAt: '', listError: '', extraEvents: [], extraRanges: [], poolFrom: '', poolTo: '' }; } })();
   const saveCal = () => { try { localStorage.setItem(CAL_KEY, JSON.stringify(cal)); } catch (e) { /* noop */ } };
   const GCAL_KEY = 'lifeplan.gcal';
   // calendar.events（予定の読み書き）＋ calendarlist.readonly（カレンダー一覧：v1.7.0 のカレンダータブ用）
@@ -1573,7 +1574,12 @@
     ok.forEach((s) => s.value.forEach((e) => byKey.set(e.calendarId + '\n' + e.id, e)));
     const events = [...byKey.values()].sort((a, b) => String(a.start).localeCompare(String(b.start)));
     const before = JSON.stringify(cal.calendar);
-    cal = { calendar: { updatedAt: nowIso(), events }, calendars, calendarsFetchedAt: cal.calendarsFetchedAt, links: cal.links, fetchedAt: nowIso(), listError };
+    // v1.8.0：基本範囲（poolFrom〜poolTo）を記録。範囲外を追加取得した分（extraEvents/extraRanges）は
+    // 基本範囲に取り込まれた分だけ掃除して残す（基本範囲の内容が正で、追加分はその外側だけを持つ）
+    const poolFrom = todayStr(tPast); const poolTo = todayStr(t180);
+    const extraRanges = (cal.extraRanges || []).filter((r) => r.to < poolFrom || r.from > poolTo);
+    const extraEvents = (cal.extraEvents || []).filter((e) => { const d = evDate(e.start); return d && (d < poolFrom || d > poolTo); });
+    cal = { calendar: { updatedAt: nowIso(), events }, calendars, calendarsFetchedAt: cal.calendarsFetchedAt, links: cal.links, fetchedAt: nowIso(), listError, extraEvents, extraRanges, poolFrom, poolTo };
     calUi.error = ''; saveCal();
     await flushGcalDeletes();
     if (before !== JSON.stringify(cal.calendar)) rerenderSoft();
@@ -1621,7 +1627,18 @@
     const date = evDate(e.start); if (!date) return null;
     return { id: String(e.id), calendarId: String(e.calendarId || 'primary'), color: String(e.color || ''), title: String(e.title || e.summary || '（無題の予定）'), start: String(e.start), end: String(e.end || ''), date, allDay: e.allDay === true || isDateStr(String(e.start)), location: String(e.location || ''), description: String(e.description || '') };
   }
-  const calEvents = () => ((cal.calendar && Array.isArray(cal.calendar.events)) ? cal.calendar.events : []).map(normEvent).filter(Boolean).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
+  const calEvents = () => {
+    const base = (cal.calendar && Array.isArray(cal.calendar.events)) ? cal.calendar.events : [];
+    const extra = Array.isArray(cal.extraEvents) ? cal.extraEvents : [];
+    let all = base;
+    if (extra.length) { // v1.8.0：範囲外を追加取得した分をマージ（基本範囲側を正として重複排除）
+      const m = new Map();
+      extra.forEach((e) => { if (e && e.id) m.set(String(e.calendarId || 'primary') + '\n' + e.id, e); });
+      base.forEach((e) => { if (e && e.id) m.set(String(e.calendarId || 'primary') + '\n' + e.id, e); });
+      all = [...m.values()];
+    }
+    return all.map(normEvent).filter(Boolean).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
+  };
   const calLinks = () => (cal.links && cal.links.links && typeof cal.links.links === 'object' ? cal.links.links : {});
   const calLinkDeleted = () => (cal.links && cal.links.deleted && typeof cal.links.deleted === 'object' ? cal.links.deleted : {});
   const HOURGLASS = /⏳/;
@@ -1650,7 +1667,7 @@
     const parse = (f) => { if (!f.exists || !f.text.trim()) return null; try { return JSON.parse(f.text); } catch (e) { return extractJson(f.text); } };
     const c1 = parse(f1); const c2 = parse(f2);
     const before = JSON.stringify([cal.calendar, cal.links]);
-    cal = { calendar: c1 && typeof c1 === 'object' ? c1 : null, links: c2 && typeof c2 === 'object' ? c2 : null, fetchedAt: nowIso(), calendars: cal.calendars, calendarsFetchedAt: cal.calendarsFetchedAt, listError: cal.listError };
+    cal = { calendar: c1 && typeof c1 === 'object' ? c1 : null, links: c2 && typeof c2 === 'object' ? c2 : null, fetchedAt: nowIso(), calendars: cal.calendars, calendarsFetchedAt: cal.calendarsFetchedAt, listError: cal.listError, extraEvents: cal.extraEvents || [], extraRanges: cal.extraRanges || [], poolFrom: cal.poolFrom || '', poolTo: cal.poolTo || '' };
     calUi.error = ''; saveCal();
     // コーチが Google から消した予定は、削除の依頼リストから外す
     const dels = calLinkDeleted();
@@ -1735,12 +1752,14 @@
     if (past.length) out.push(`<details class="cd-past-wrap"><summary class="month-head">終わった予定（${past.length}件）</summary>${past.map(countdownCard).join('')}</details>`);
     return out.join('');
   }
-  // ───────────────────────── 📅 カレンダータブ（v1.7.0） ─────────────────────────
-  // 全カレンダーの予定を月表示＋日リストで見て、その場で追加・編集・削除する（Google Calendar API 直接）。
-  // 予定データは cal.calendar.events（全カレンダー分・calendarId と色つき）をそのまま使う。
-  const gtab = { month: '', day: '' };
+  // ───────────────────────── 📅 カレンダータブ（v1.7.0／v1.8.0 で月・週・日表示に作り替え） ─────────────────────────
+  // 全カレンダーの予定を見て、その場で追加・編集・削除する（Google Calendar API 直接）。
+  // 予定データは cal.calendar.events（基本範囲：過去30日〜未来180日・全カレンダー分・calendarId と色つき）
+  // ＋ cal.extraEvents（表示範囲が基本範囲の外に出たときに追加取得した分）。
+  const gtab = { month: '', day: '', view: 'month' }; // view: 'month' | 'week' | 'day'（既定は月）
   function gtabInit() { const t = todayStr(); if (!gtab.day) gtab.day = t; if (!gtab.month) gtab.month = t.slice(0, 7); }
   const gtabEvents = () => calEvents();
+  function mondayOf(ds) { const d = new Date(ds + 'T00:00:00'); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return todayStr(d); }
   function gevOnDay(e, day) {
     if (e.allDay) { const endEx = e.end && e.end > e.date ? e.end : addDays(e.date, 1); return day >= e.date && day < endEx; }
     return e.date === day;
@@ -1750,6 +1769,68 @@
     if (e.allDay) return '終日';
     const s = gevTime(e.start); const en = e.end ? gevTime(e.end) : '';
     return en && en !== s ? `${s}–${en}` : s;
+  }
+  const gevSort = (a, b) => (a.allDay === b.allDay ? String(a.start).localeCompare(String(b.start)) : a.allDay ? -1 : 1);
+  function gtabDayListHtml(day, evs) {
+    const list = evs.filter((e) => gevOnDay(e, day)).sort(gevSort);
+    if (!list.length) return '<p class="muted small">この日の予定はありません</p>';
+    return `<ul class="plain-list">${list.map((e) => { const cm = gcalCalendarById(e.calendarId); const ro = !gcalWritableCal(cm); return `<li><button type="button" class="gtab-ev" data-action="gevOpen" data-cid="${esc(e.calendarId)}" data-eid="${esc(e.id)}"><span class="gtab-dot" style="background:${esc(e.color || (cm && cm.color) || '#4285f4')}"></span><span class="gtab-time">${esc(gevTimeLabel(e))}</span><span class="grow"><b>${esc(trunc(e.title, 40))}</b><span class="muted small"> ${esc(cm ? cm.summary : '')}${e.location ? '・' + esc(trunc(e.location, 20)) : ''}</span></span>${ro ? '<span class="chip">閲覧のみ</span>' : ''}</button></li>`; }).join('')}</ul>`;
+  }
+  // 前へ／次へ／今日：表示単位（月・週・日）に連動する。スワイプ（下記）とボタンで共用
+  function gtabMove(dir) {
+    gtabInit();
+    if (dir === 0) { const t = todayStr(); gtab.day = t; gtab.month = t.slice(0, 7); }
+    else if (gtab.view === 'week') { gtab.day = addDays(gtab.day, dir * 7); gtab.month = gtab.day.slice(0, 7); }
+    else if (gtab.view === 'day') { gtab.day = addDays(gtab.day, dir); gtab.month = gtab.day.slice(0, 7); }
+    else { const [y, m] = gtab.month.split('-').map(Number); gtab.month = monthKey(new Date(y, m - 1 + dir, 1)); }
+    rerender();
+  }
+  // ── 表示範囲のオンデマンド追加取得（v1.8.0）──
+  // 取得済み範囲 = 基本範囲（cal.poolFrom〜poolTo）＋ cal.extraRanges。表示がその外に出たら不足分だけ取る。
+  // ⏳ 用の2年取得（pullCalendarDirect 内）には触らない。失敗しても画面は壊さず、理由を calUi.error に残す。
+  let gtabFetching = false;
+  let gtabFetchFailKey = '';
+  function gtabFirstGap(from, to) {
+    const ivs = [];
+    if (cal.poolFrom && cal.poolTo) ivs.push([cal.poolFrom, cal.poolTo]);
+    (Array.isArray(cal.extraRanges) ? cal.extraRanges : []).forEach((r) => ivs.push([r.from, r.to]));
+    ivs.sort((a, b) => a[0].localeCompare(b[0]));
+    let cur = from;
+    for (const [a, b] of ivs) {
+      if (b < cur) continue;
+      if (a > cur) return [cur, addDays(a, -1) < to ? addDays(a, -1) : to];
+      cur = addDays(b, 1);
+      if (cur > to) return null;
+    }
+    return cur <= to ? [cur, to] : null;
+  }
+  async function gtabFetchRange(from, to) {
+    const calendars = (Array.isArray(cal.calendars) ? cal.calendars : []).filter((c) => c.selected);
+    const tMin = new Date(from + 'T00:00:00').toISOString();
+    const tMax = new Date(addDays(to, 1) + 'T00:00:00').toISOString();
+    const settled = await Promise.allSettled(calendars.map((c) => gcalListEventsFor(c.id, tMin, tMax, '', c)));
+    const ok = settled.filter((s) => s.status === 'fulfilled');
+    if (!ok.length && settled.length) throw (settled[0] && settled[0].reason) || new Error('Googleカレンダーを取得できませんでした');
+    const byKey = new Map((Array.isArray(cal.extraEvents) ? cal.extraEvents : []).map((e) => [String(e.calendarId || 'primary') + '\n' + e.id, e]));
+    ok.forEach((s) => s.value.forEach((e) => byKey.set(e.calendarId + '\n' + e.id, e)));
+    cal.extraEvents = [...byKey.values()];
+    cal.extraRanges = [...(Array.isArray(cal.extraRanges) ? cal.extraRanges : []), { from, to }];
+    saveCal();
+  }
+  async function gtabEnsureRange(from, to) {
+    if (!gcalConnected() || gtabFetching) return;
+    if (!cal.poolFrom || !cal.poolTo) return; // 基本範囲がまだ無い（初回取得前）は基本取得に任せる
+    const key = from + '..' + to;
+    if (gtabFetchFailKey === key) return; // 同じ範囲で失敗を繰り返さない（次の手動取得などで回復する）
+    if (!gtabFirstGap(from, to)) return;
+    gtabFetching = true;
+    try {
+      let gap = gtabFirstGap(from, to);
+      for (let n = 0; n < 4 && gap; n++) { await gtabFetchRange(gap[0], gap[1]); gap = gtabFirstGap(from, to); }
+      gtabFetchFailKey = '';
+      rerenderSoft();
+    } catch (e) { gtabFetchFailKey = key; calUi.error = e.message || String(e); rerenderSoft(); }
+    finally { gtabFetching = false; }
   }
   function viewCalendar() {
     gtabInit();
@@ -1770,33 +1851,88 @@
     out.push(sectionHead('📅 カレンダー', 'Googleカレンダーの予定', '<button class="btn primary small" data-action="gevNew">＋ 追加</button>'));
     if (cal.listError) out.push(`<p class="cal-alert small" role="alert">⚠️ カレンダー一覧を取得できませんでした（${esc(cal.listError)}）。購読カレンダーなどが表示されていない可能性があります。設定 → Googleカレンダー連携で「Googleと連携する」を押し直してください。</p>`);
     const evs = gtabEvents();
-    const [gy, gm] = gtab.month.split('-').map(Number);
-    const firstDow = new Date(gy, gm - 1, 1).getDay();
-    const gridStart = new Date(gy, gm - 1, 1 - firstDow);
+    const view = gtab.view;
     const today = todayStr();
-    let cells = '';
-    for (let i = 0; i < 42; i++) {
-      const d = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + i);
-      const ds = todayStr(d);
-      const dayEvs = evs.filter((e) => gevOnDay(e, ds));
-      const colors = [...new Set(dayEvs.map((e) => e.color).filter(Boolean))].slice(0, 3);
-      cells += `<button type="button" class="gtab-cell ${ds.slice(0, 7) !== gtab.month ? 'other' : ''} ${ds === today ? 'today' : ''} ${ds === gtab.day ? 'sel' : ''}" data-action="gtabDay" data-date="${ds}" aria-label="${ds}"><span class="gtab-d">${d.getDate()}</span><span class="gtab-dots">${colors.map((c) => `<i style="background:${esc(c)}"></i>`).join('')}</span></button>`;
+    // 表示範囲（追加取得の判定にも使う）とタイトル
+    let title = ''; let needFrom = ''; let needTo = '';
+    let gridStart = null;
+    if (view === 'month') {
+      const [gy, gm] = gtab.month.split('-').map(Number);
+      title = `${gy}年${gm}月`;
+      const first = new Date(gy, gm - 1, 1);
+      gridStart = new Date(gy, gm - 1, 1 - ((first.getDay() + 6) % 7)); // 月曜始まり
+      needFrom = todayStr(gridStart);
+      needTo = todayStr(new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + 41));
+    } else if (view === 'week') {
+      const mon = mondayOf(gtab.day); const sun = addDays(mon, 6);
+      title = mon.slice(0, 7) === sun.slice(0, 7)
+        ? `${Number(mon.slice(5, 7))}月${Number(mon.slice(8, 10))}日〜${Number(sun.slice(8, 10))}日`
+        : `${Number(mon.slice(5, 7))}月${Number(mon.slice(8, 10))}日〜${Number(sun.slice(5, 7))}月${Number(sun.slice(8, 10))}日`;
+      needFrom = mon; needTo = sun;
+    } else {
+      const d = gtab.day;
+      title = `${Number(d.slice(5, 7))}月${Number(d.slice(8, 10))}日（${'日月火水木金土'[new Date(d + 'T00:00:00').getDay()]}）`;
+      needFrom = d; needTo = d;
     }
-    const legend = (cal.calendars || []).filter((c) => c.selected).map((c) => `<span class="gtab-cal"><i style="background:${esc(c.color)}"></i>${esc(trunc(c.summary, 14))}</span>`).join('');
-    out.push(`<section class="card gtab-card">
-      <div class="gtab-nav"><button type="button" class="btn ghost small" data-action="gtabMonth" data-dir="-1" aria-label="前の月">‹</button><h2>${gy}年${gm}月</h2><span class="btn-row"><button type="button" class="btn ghost small" data-action="gtabMonth" data-dir="0">今日</button><button type="button" class="btn ghost small" data-action="gtabMonth" data-dir="1" aria-label="次の月">›</button></span></div>
-      <div class="gtab-grid dow">${'日月火水木金土'.split('').map((w) => `<span>${w}</span>`).join('')}</div>
+    gtabEnsureRange(needFrom, needTo);
+    const unit = view === 'month' ? '月' : view === 'week' ? '週' : '日';
+    let bodyHtml = '';
+    if (view === 'month') {
+      let cells = '';
+      for (let i = 0; i < 42; i++) {
+        const d = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + i);
+        const ds = todayStr(d);
+        const dayEvs = evs.filter((e) => gevOnDay(e, ds)).sort(gevSort);
+        const chips = dayEvs.slice(0, 3).map((e) => { const cm = gcalCalendarById(e.calendarId); return `<span class="gtab-chip" style="background:${esc(e.color || (cm && cm.color) || '#4285f4')}">${esc(trunc(e.title, 12))}</span>`; }).join('');
+        const more = dayEvs.length > 3 ? `<span class="gtab-more">他${dayEvs.length - 3}件</span>` : '';
+        cells += `<button type="button" class="gtab-cell ${ds.slice(0, 7) !== gtab.month ? 'other' : ''} ${ds === today ? 'today' : ''} ${ds === gtab.day ? 'sel' : ''}" data-action="gtabDay" data-date="${ds}" aria-label="${ds}"><span class="gtab-d">${d.getDate()}</span><span class="gtab-chips">${chips}${more}</span></button>`;
+      }
+      const legend = (cal.calendars || []).filter((c) => c.selected).map((c) => `<span class="gtab-cal"><i style="background:${esc(c.color)}"></i>${esc(trunc(c.summary, 14))}</span>`).join('');
+      bodyHtml = `<div class="gtab-grid dow">${'月火水木金土日'.split('').map((w) => `<span>${w}</span>`).join('')}</div>
       <div class="gtab-grid">${cells}</div>
-      ${legend ? `<div class="gtab-legend">${legend}</div>` : ''}
-    </section>`);
-    const day = gtab.day;
-    const list = evs.filter((e) => gevOnDay(e, day)).sort((a, b) => (a.allDay === b.allDay ? String(a.start).localeCompare(String(b.start)) : a.allDay ? -1 : 1));
-    out.push(`<section class="card"><div class="card-head"><h2>${fmtDate(day)}</h2><span class="muted small">${list.length}件</span></div>
-      ${list.length ? `<ul class="plain-list">${list.map((e) => { const cm = gcalCalendarById(e.calendarId); const ro = !gcalWritableCal(cm); return `<li><button type="button" class="gtab-ev" data-action="gevOpen" data-cid="${esc(e.calendarId)}" data-eid="${esc(e.id)}"><span class="gtab-dot" style="background:${esc(e.color || (cm && cm.color) || '#4285f4')}"></span><span class="gtab-time">${esc(gevTimeLabel(e))}</span><span class="grow"><b>${esc(trunc(e.title, 40))}</b><span class="muted small"> ${esc(cm ? cm.summary : '')}${e.location ? '・' + esc(trunc(e.location, 20)) : ''}</span></span>${ro ? '<span class="chip">閲覧のみ</span>' : ''}</button></li>`; }).join('')}</ul>` : '<p class="muted small">この日の予定はありません</p>'}
-    </section>`);
+      ${legend ? `<div class="gtab-legend">${legend}</div>` : ''}`;
+    } else if (view === 'week') {
+      const mon = mondayOf(gtab.day);
+      let blocks = '';
+      for (let i = 0; i < 7; i++) {
+        const ds = addDays(mon, i);
+        const cnt = evs.filter((e) => gevOnDay(e, ds)).length;
+        blocks += `<div class="gtab-wday ${ds === today ? 'today' : ''}"><button type="button" class="gtab-whead" data-action="gtabDayView" data-date="${ds}" aria-label="${ds}の日表示"><b>${Number(ds.slice(5, 7))}/${Number(ds.slice(8, 10))}（${'月火水木金土日'[i]}）</b><span class="muted small">${cnt}件</span></button>${gtabDayListHtml(ds, evs)}</div>`;
+      }
+      bodyHtml = `<div class="gtab-week">${blocks}</div>`;
+    } else {
+      bodyHtml = `<div class="gtab-dayview">${gtabDayListHtml(gtab.day, evs)}</div>`;
+    }
+    out.push(`<div class="gtab-view"><section class="card gtab-card">
+      <div class="gtab-nav"><button type="button" class="btn ghost small" data-action="gtabNav" data-dir="-1" aria-label="前の${unit}">‹</button><h2>${esc(title)}</h2><span class="btn-row"><button type="button" class="btn ghost small" data-action="gtabNav" data-dir="0">今日</button><button type="button" class="btn ghost small" data-action="gtabNav" data-dir="1" aria-label="次の${unit}">›</button></span></div>
+      <div class="gtab-seg" role="group" aria-label="表示の切り替え">${[['month', '月'], ['week', '週'], ['day', '日']].map(([v, l]) => `<button type="button" class="pill ${view === v ? 'on' : ''}" data-action="gtabView" data-v="${v}" aria-pressed="${view === v}">${l}</button>`).join('')}</div>
+      ${bodyHtml}
+    </section>
+    ${view === 'month' ? `<section class="card"><div class="card-head"><h2>${fmtDate(gtab.day)}</h2><span class="muted small">${evs.filter((e) => gevOnDay(e, gtab.day)).length}件</span></div>${gtabDayListHtml(gtab.day, evs)}</section>` : ''}
+    </div>`);
     out.push(calSyncLine());
     return out.join('');
   }
+  // カレンダー表示の左右スワイプで前／次の期間へ（v1.8.0）。横移動が縦より大きく 60px を超えたときだけ。
+  // ドロワーのスワイプとは p4 の swipeBlocked（.gtab-view 内から始めた操作を除外）で競合回避し、
+  // スワイプ直後の click（セル選択など）は飲み込んで誤作動を防ぐ
+  const gSwipe = { on: false, x: 0, y: 0, until: 0 };
+  document.addEventListener('touchstart', (e) => {
+    gSwipe.on = false;
+    if (e.touches.length !== 1 || !e.target.closest) return;
+    if (!e.target.closest('.gtab-view') || e.target.closest('input, textarea, select')) return;
+    gSwipe.on = true; gSwipe.x = e.touches[0].clientX; gSwipe.y = e.touches[0].clientY;
+  }, { passive: true });
+  document.addEventListener('touchend', (e) => {
+    if (!gSwipe.on) return;
+    gSwipe.on = false;
+    const p = e.changedTouches && e.changedTouches[0]; if (!p) return;
+    const dx = p.clientX - gSwipe.x, dy = p.clientY - gSwipe.y;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) { gSwipe.until = Date.now() + 350; gtabMove(dx < 0 ? 1 : -1); }
+  }, { passive: true });
+  document.addEventListener('click', (e) => {
+    if (Date.now() < gSwipe.until && e.target.closest && e.target.closest('.gtab-view')) { e.preventDefault(); e.stopPropagation(); }
+  }, true);
   function openGcalEventEditor(cid, eid) {
     const ev = eid ? gtabEvents().find((e) => e.id === eid && e.calendarId === cid) : null;
     if (eid && !ev) { toast('予定が見つかりませんでした（再取得してください）'); return; }
@@ -1812,6 +1948,9 @@
       location: ev.location || '', description: ev.description || '',
     } : { title: '', calendarId: defCal, date: gtab.day, allDay: false, startTime: '10:00', endTime: '11:00', location: '', description: '' };
     const dis = ro ? 'disabled' : '';
+    // v1.8.0：カレンダー側からカウントダウンに追加（読み取り専用カレンダーの予定でも可。⏳ はプライマリ側に作る既存仕様）
+    const cdLinked = ev ? state.countdowns.some((c) => cdGcalId(c) === ev.id) : false;
+    const cdBtn = ev ? (cdLinked ? '<span class="chip sync-ok">カウントダウン中</span>' : `<button type="button" class="btn soft small" data-action="gevCountdown" data-cid="${esc(ev.calendarId)}" data-eid="${esc(ev.id)}" data-id="${esc(ev.id)}">⏳ カウントダウンにする</button>`) : '';
     openModal(`${modalHead(ev ? (ro ? '予定の詳細' : '予定を編集') : '予定を追加')}
       <form data-form="gcalEvent" data-cid="${esc(ev ? ev.calendarId : '')}" data-eid="${esc(ev ? ev.id : '')}">
         <label class="field"><span class="field-label">タイトル</span><input name="title" value="${esc(v.title)}" required autocomplete="off" placeholder="例：会議、通院" ${ev ? '' : 'autofocus'} ${dis}></label>
@@ -1825,7 +1964,7 @@
         <label class="field"><span class="field-label">場所（任意）</span><input name="location" value="${esc(v.location)}" autocomplete="off" ${dis}></label>
         <label class="field"><span class="field-label">メモ（任意）</span><textarea name="description" rows="3" ${dis}>${esc(v.description)}</textarea></label>
         ${ro ? '<p class="muted small">このカレンダーは読み取り専用です。変更・削除は Google カレンダーで行ってください。</p>' : ''}
-        <div class="btn-row between">${ev && !ro ? `<button type="button" class="btn ghost danger" data-action="gevDelete" data-cid="${esc(ev.calendarId)}" data-eid="${esc(ev.id)}">削除</button>` : '<span></span>'}
+        <div class="btn-row between"><span class="btn-row">${ev && !ro ? `<button type="button" class="btn ghost danger" data-action="gevDelete" data-cid="${esc(ev.calendarId)}" data-eid="${esc(ev.id)}">削除</button>` : ''}${cdBtn}</span>
           <span class="btn-row"><button type="button" class="btn ghost" data-action="closeModal">${ro ? '閉じる' : 'キャンセル'}</button>${ro ? '' : `<button class="btn primary" type="submit">${ev ? '保存' : '追加'}</button>`}</span></div>
       </form>`);
   }

@@ -95,6 +95,7 @@
     moveTabIndicator(changed);
     if (r.name === 'ai' && !keepScroll) aiScrollBottom();
     document.body.classList.toggle('route-ai', r.name === 'ai');
+    document.body.classList.toggle('route-matrix', r.name === 'matrix'); // v1.8.0：マトリクスは見出しなし・ほぼ全画面
     if (r.name === 'search' && !keepScroll) setTimeout(() => { const s = $('#searchInput'); if (s) s.focus(); }, 50);
   }
   const rerender = () => render(true);
@@ -154,7 +155,7 @@
   const isDrawerOpen = () => document.body.classList.contains('drawer-open');
   function swipeBlocked(t) {
     if (!t || !t.closest) return true;
-    if (t.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"], .modal-backdrop:not([hidden]), .photo-viewer, .pomu-celebrate, .task-row-wrap')) return true; // .task-row-wrap：行の左スワイプ削除（p6）と競合させない
+    if (t.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"], .modal-backdrop:not([hidden]), .photo-viewer, .pomu-celebrate, .task-row-wrap, .gtab-view')) return true; // .task-row-wrap：行の左スワイプ削除（p6）と競合させない。.gtab-view：カレンダーの左右スワイプ期間移動（p5）と競合させない
     if (!backdrop.hidden) return true;
     for (let el = t; el && el !== document.body; el = el.parentElement) {
       if (el.scrollWidth > el.clientWidth + 2) { const ox = getComputedStyle(el).overflowX; if (ox === 'auto' || ox === 'scroll') return true; }
@@ -312,7 +313,7 @@
         <input name="title" class="big-input" placeholder="何をしたい？" required autocomplete="off" autofocus enterkeyhint="done" aria-label="タイトル">
         <div class="field"><span class="field-label">追加先</span><div class="seg wrap">${dests.map(([k, l]) => `<label class="pill-radio"><input type="radio" name="dest" value="${k}" ${def === k ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div></div>
         <div class="field qa-quad"><span class="field-label">緊急度 × 重要度</span>${quadSelect('quadrant', preset.quadrant || '')}</div>
-        <div class="field qa-cat"><span class="field-label">カテゴリ</span><select name="category">${catOptions('')}</select></div>
+        <div class="field qa-cat"><span class="field-label">カテゴリ</span><select name="category">${catOptions('', null)}</select></div>
         <div class="btn-row end"><button type="button" class="btn ghost" data-action="quickAddDetail">詳しく入力</button><button class="btn primary" type="submit">追加</button></div>
       </form>`, { onOpen: (box) => {
       const upd = () => { const d = $('input[name=dest]:checked', box).value; $('.qa-quad', box).hidden = d === 'lesson'; $('.qa-cat', box).hidden = d === 'lesson' || d === 'inbox'; };
@@ -346,7 +347,7 @@
         <div class="grid2">
           <label class="field"><span class="field-label">リスト</span><select name="list">${options(LISTS, i.list)}</select></label>
           <label class="field"><span class="field-label">状態</span><select name="status">${options(STATUS, i.status)}</select></label>
-          <label class="field"><span class="field-label">カテゴリ</span><select name="category">${catOptions(i.category)}</select></label>
+          <label class="field"><span class="field-label">カテゴリ</span><select name="category">${catOptions(i.category, null)}</select></label>
           <label class="field"><span class="field-label">重要度</span><select name="importance">${options(IMPORTANCE, i.importance)}</select></label>
           <label class="field"><span class="field-label">目標の時期</span><select name="timeframe">${options(TIMEFRAME, i.timeframe, '（未設定）')}</select></label>
           <label class="field"><span class="field-label">目標日（任意）</span><input type="date" name="targetDate" value="${esc(i.targetDate)}"></label>
@@ -367,7 +368,7 @@
     if (newStatus !== i.status) setStatus(i, newStatus);
     const prevList = i.list;
     Object.assign(i, {
-      title, notes: String(fd.get('notes') || ''), list: fd.get('list'), category: fd.get('category') || '', importance: fd.get('importance'),
+      title, notes: String(fd.get('notes') || ''), list: fd.get('list'), category: normCategory(fd.get('category') || ''), importance: fd.get('importance'),
       timeframe: fd.get('timeframe') || '', targetDate: fd.get('targetDate') || '', quadrant: fd.get('quadrant') || '',
       tags: String(fd.get('tags') || '').split(/[,、]/).map((s) => s.trim()).filter(Boolean),
     });

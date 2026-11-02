@@ -282,8 +282,8 @@
     </section>`);
     out.push(`<section class="card">
       <div class="card-head"><h2>カテゴリ</h2></div>
-      <ul class="cat-edit">${state.categories.map((c, idx) => `<li><input value="${esc(c)}" data-change="renameCat" data-idx="${idx}" aria-label="カテゴリ名"><button class="icon-btn small danger" data-action="deleteCat" data-idx="${idx}" aria-label="${esc(c)}を削除">${ICON.trash}</button></li>`).join('')}</ul>
-      <form class="add-step" data-form="addCat"><input name="name" placeholder="新しいカテゴリ" autocomplete="off"><button class="btn primary small" type="submit">追加</button></form>
+      <p class="muted small">カテゴリは「プライベート」と「仕事」の2つに固定です（v1.8.0〜）。以前のカテゴリは自動で振り分け直しました（仕事・仕事/キャリア → 仕事、それ以外 → プライベート）。</p>
+      <ul class="cat-edit">${CATEGORIES.map((c) => `<li><span>${esc(c)}</span></li>`).join('')}</ul>
     </section>`);
     out.push(`<section class="card">
       <div class="card-head"><h2>表示</h2></div>

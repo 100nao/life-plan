@@ -13,7 +13,8 @@
   const chip = (text, cls = '') => `<span class="chip ${cls}">${esc(text)}</span>`;
   const opt = (v, label, cur) => `<option value="${esc(v)}" ${String(v) === String(cur) ? 'selected' : ''}>${esc(label)}</option>`;
   const options = (map, cur, emptyLabel) => (emptyLabel != null ? opt('', emptyLabel, cur) : '') + Object.entries(map).map(([k, v]) => opt(k, v, cur)).join('');
-  const catOptions = (cur, emptyLabel = '（なし）') => opt('', emptyLabel, cur) + state.categories.map((c) => opt(c, c, cur)).join('') + (cur && !state.categories.includes(cur) ? opt(cur, cur, cur) : '');
+  // カテゴリは「プライベート」「仕事」の2択固定（v1.8.0）。emptyLabel=null のときは空の選択肢を出さない（編集フォーム用）
+  const catOptions = (cur, emptyLabel = '（なし）') => (emptyLabel != null ? opt('', emptyLabel, cur) : '') + CATEGORIES.map((c) => opt(c, c, cur)).join('');
   function progressBar(done, total, cls = '') {
     const pct = total ? Math.round((done / total) * 100) : 0;
     return `<div class="progress ${cls}" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>`;
@@ -250,7 +251,7 @@
     const pool = activeItems().filter((i) => (f === 'all' ? true : i.list === f));
     const filters = [['all', 'すべて'], ['task', 'タスク'], ['wish', 'やりたい事'], ['later', '後回し'], ['inbox', '未整理']];
     const unclassified = pool.filter((i) => !i.quadrant);
-    const out = [sectionHead('マトリックス', '緊急度 × 重要度で整理。⇄ をタップして象限を移動（PCはドラッグも可）。')];
+    const out = [];
     out.push(`<div class="seg-scroll">${filters.map(([k, l]) => `<button class="pill ${f === k ? 'on' : ''}" data-action="matrixFilter" data-v="${k}">${l}</button>`).join('')}</div>`);
     if (!state.items.length) {
       out.push(emptyState('まだタスクがありません', '紙のマトリックスに書いている内容をここに移せます。手書きメモのサンプルを入れて試すこともできます。',
@@ -278,12 +279,25 @@
   // ───────────────────────── 画面: TASK（v1.7.0 で旧「やりたい事」を全件表示に改名） ─────────────────────────
   // 分類（タスク／やりたい事／後回し／未整理）は問わず出す。状態の既定は未完了のみ（v1.7.1。完了済みは
   // 状態フィルターで「すべて／完了」を選べば見られる）。絞り込みはフィルターで行う。
-  // 未整理タブ廃止に伴い、未整理の項目にも ここの「分類： 未整理」フィルターで必ず届く。
-  // 行は左スワイプで「削除」ボタンが出る（v1.7.1。実処理は p6 のスワイプ処理＋既存 deleteItem アクション）。
+  // v1.8.0：分類フィルターは廃止し、期限（目標日）フィルターに置き換えた。未整理の項目も既定表示
+  // （期限：すべて・未完了のみ）に出るので、そこから届く。行は左スワイプで「削除」ボタンが出る
+  // （v1.7.1。実処理は p6 のスワイプ処理＋既存 deleteItem アクション）。
+  const DUE_FILTERS = { today: '今日中', week: '今週中', month: '1ヶ月以内', over: '1ヶ月以上' };
+  function dueMatch(i, f) {
+    if (!f) return true;
+    const d = i.targetDate;
+    if (!isDateStr(d)) return false; // 期限なしは「すべて」のときだけ
+    const t = todayStr();
+    if (f === 'today') return d <= t; // 期限切れ（過去）も「今日中」に含める
+    if (f === 'week') return d <= addDays(mondayOf(t), 6); // 今週の日曜日まで（月曜始まり）
+    if (f === 'month') return d <= addDays(t, 30);
+    if (f === 'over') return d > addDays(t, 30);
+    return true;
+  }
   function viewWish() {
     const w = ui.wish;
     const all = state.items;
-    const list = all.filter((i) => (!w.list || i.list === w.list) && (!w.cat || i.category === w.cat) && (!w.imp || i.importance === w.imp) && (!w.tf || i.timeframe === w.tf)
+    const list = all.filter((i) => dueMatch(i, w.due) && (!w.cat || i.category === w.cat) && (!w.imp || i.importance === w.imp) && (!w.tf || i.timeframe === w.tf)
       && (w.status === 'all' ? true : w.status === 'open' ? i.status !== 'done' : i.status === w.status));
     const sorters = {
       updated: (a, b) => b.updatedAt.localeCompare(a.updatedAt),
@@ -298,7 +312,7 @@
     const out = [sectionHead('TASK', `すべてのタスク・${all.length}件中 ${done}件 完了`, `<button class="btn primary small" data-action="quickAdd" data-list="task">＋ 追加</button>`)];
     if (all.length) out.push(progressBar(done, all.length));
     out.push(`<div class="filters">
-      <select data-change="wishFilter" data-k="list" aria-label="分類">${options(LISTS, w.list, '分類: すべて')}</select>
+      <select data-change="wishFilter" data-k="due" aria-label="期限">${options(DUE_FILTERS, w.due, '期限: すべて')}</select>
       <select data-change="wishFilter" data-k="cat" aria-label="カテゴリ">${catOptions(w.cat, 'カテゴリ: すべて')}</select>
       <select data-change="wishFilter" data-k="imp" aria-label="重要度">${options(IMPORTANCE, w.imp, '重要度: すべて')}</select>
       <select data-change="wishFilter" data-k="tf" aria-label="時期">${options(TIMEFRAME, w.tf, '時期: すべて')}</select>

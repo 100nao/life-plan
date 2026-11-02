@@ -415,7 +415,7 @@ with sync_playwright() as p:
     r = S(pg, "LifePlan.state.items.filter(i => i.source === 'reminders').map(i => ({t: i.title, list: i.list, imp: i.importance, due: i.targetDate, cat: i.category, tags: i.tags}))")
     by = {x['t']: x for x in r}
     check('リマインダー：未整理へ・完了はスキップ', len(r) == 3 and all(x['list'] == 'inbox' for x in r) and '済んだこと' not in by)
-    check('リマインダー：優先度・期限・カテゴリ・タグ', by['パスポート更新']['imp'] == 'high' and by['パスポート更新']['due'] == '2026-12-20' and by['パスポート更新']['cat'] == '旅行' and by['パスポート更新']['tags'] == ['手続き'] and by['歯医者の予約']['imp'] == 'high' and by['歯医者の予約']['cat'] == '健康')
+    check('リマインダー：優先度・期限・カテゴリ・タグ', by['パスポート更新']['imp'] == 'high' and by['パスポート更新']['due'] == '2026-12-20' and by['パスポート更新']['cat'] == 'プライベート' and by['パスポート更新']['tags'] == ['手続き'] and by['歯医者の予約']['imp'] == 'high' and by['歯医者の予約']['cat'] == 'プライベート')  # v1.8.0：カテゴリは プライベート/仕事 に寄せる（旅行・健康 → プライベート）
     pg.click('[data-action=remindersImport]'); wait_idle(pg, 300)
     pg.fill('#remText', json.dumps(rem['reminders'], ensure_ascii=False))
     pg.click('[data-action=remindersRun]'); wait_idle(pg)
@@ -772,7 +772,7 @@ with sync_playwright() as p:
     def dd(n): return (TD - datetime.timedelta(days=n)).isoformat()
     def pomu(done, start, today=None):
         return pg.evaluate("([d, s, t]) => LifePlan.pomu({id: 'x', name: 't', startDate: s, done: d}, t)", [done, start, today or TD.isoformat()])
-    check('バージョン 1.7.2', S(pg, 'LifePlan.version') == '1.7.2')
+    check('バージョン 1.8.0', S(pg, 'LifePlan.version') == '1.8.0')
     check('習慣：state.habits が配列', S(pg, 'Array.isArray(LifePlan.state.habits)'))
     # ぽむのルール
     r = pomu([], dd(0)); check('ぽむ：0日はたまご（stage-1）', r['key'] == 'stage-1' and r['lv'] == 1, r)
@@ -1059,7 +1059,7 @@ with sync_playwright() as p:
     db = pg.locator('#drawer').bounding_box()
     check('スワイプ：右から左へなぞるとメニューが開く', is_open() and pg.is_visible('#drawerBackdrop'))
     check('スワイプ：メニューは右側から出る', db and abs(db['x'] + db['width'] - 390) <= 2 and db['x'] > 30, db)
-    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.7.2' in pg.inner_text('#drawer [data-action=forceUpdate]'))
+    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.8.0' in pg.inner_text('#drawer [data-action=forceUpdate]'))
     shot(pg, 'v131_menu.png')
     swipe(90, 500, 330, 505)
     check('スワイプ：左から右へで閉じる', not is_open())
@@ -1563,7 +1563,7 @@ with sync_playwright() as p:
     pg.evaluate("location.hash = '#calendar'"); wait_idle(pg, 600)
     check('カレンダータブ：月表示グリッド（42マス）', pg.locator('.gtab-cell').count() == 42 and 'カレンダー' in pg.title())
     check('カレンダータブ：今日の予定に仕事カレンダーの予定が出る', '仕事の会議' in pg.inner_text('#main') and '仕事' in pg.inner_text('#main'))
-    check('カレンダータブ：予定のある日に色ドット', pg.locator(f'.gtab-cell[data-date="{TD.isoformat()}"] .gtab-dots i').count() >= 1)
+    check('カレンダータブ：予定のある日にタイトルチップ', pg.locator(f'.gtab-cell[data-date="{TD.isoformat()}"] .gtab-chip').count() >= 1)  # v1.8.0：ドット→チップ
     shot(pg, 'v170_calendar.png')
     # 追加：仕事カレンダーへ POST される
     pg.click('[data-action=gevNew]'); wait_idle(pg, 400)
@@ -1633,6 +1633,75 @@ with sync_playwright() as p:
     pg.click('.topbar-actions [data-action=refreshAll]')
     wait_js(pg, "!document.getElementById('refreshBtn').classList.contains('spinning') && document.getElementById('toast').textContent.includes('更新しました')", 10000)
     check('v1.7.2：更新ボタンで「更新しました ✓」トースト', '更新しました' in pg.inner_text('#toast'))
+    # ── v1.8.0：カレンダータブの月・週・日表示／チップ／詳細からカウントダウン／範囲外の追加取得／スワイプ ──
+    import urllib.parse as uparse
+    for n_, hh in enumerate(['09:00', '10:00', '11:00', '12:00']):
+        gcal_fake.events[f'chip_{n_}'] = {'id': f'chip_{n_}', 'summary': f'チップ{n_}', 'start': {'dateTime': f'{tdp(2)}T{hh}:00+09:00'}, 'end': {'dateTime': f'{tdp(2)}T{hh}:30:00+09:00'}}
+    pg.evaluate('LifePlan.pullCalendar()'); wait_js(pg, "LifePlan.calendar.calendar && LifePlan.calendar.calendar.events.some(e => e.id === 'chip_3')", 8000); wait_idle(pg, 300)
+    pg.evaluate("location.hash = '#calendar'"); wait_idle(pg, 600)
+    check('v1.8.0：既定は月表示・月曜始まり', pg.locator('.gtab-grid .gtab-cell').count() == 42 and pg.eval_on_selector('.gtab-grid.dow span >> nth=0', 'e => e.textContent') == '月' and pg.eval_on_selector('.gtab-grid.dow span >> nth=6', 'e => e.textContent') == '日' and pg.get_attribute('[data-action=gtabView][data-v=month]', 'aria-pressed') == 'true')
+    cell2 = pg.locator(f'.gtab-cell[data-date="{tdp(2)}"]')
+    check('v1.8.0：月セルはチップ最大3件＋「他N件」（その日5件）', cell2.locator('.gtab-chip').count() == 3 and '他2件' in cell2.inner_text() and 'チップ0' in cell2.inner_text(), cell2.inner_text())
+    # 週表示：7日分のブロック＋その週の予定が全件リストで出る
+    pg.click('[data-action=gtabView][data-v=week]'); wait_idle(pg, 500)
+    check('v1.8.0：週表示は7日分のブロック', pg.locator('.gtab-wday').count() == 7 and '〜' in pg.inner_text('.gtab-nav h2'), pg.inner_text('.gtab-nav h2'))
+    check('v1.8.0：週表示に今日の予定（仕事の会議）が出る', '仕事の会議' in pg.inner_text('.gtab-week'))
+    # 日表示：タイトル形式と前へ／次への単位連動
+    pg.click('[data-action=gtabView][data-v=day]'); wait_idle(pg, 500)
+    check('v1.8.0：日表示のタイトルは「M月D日（曜）」', pg.inner_text('.gtab-nav h2') == f'{TD.month}月{TD.day}日（{"日月火水木金土"[(TD.weekday() + 1) % 7]}）', pg.inner_text('.gtab-nav h2'))
+    pg.click('[data-action=gtabNav][data-dir="1"]'); wait_idle(pg, 400)
+    nd = TD + datetime.timedelta(days=1)
+    check('v1.8.0：日表示の「次へ」は翌日', pg.inner_text('.gtab-nav h2') == f'{nd.month}月{nd.day}日（{"日月火水木金土"[(nd.weekday() + 1) % 7]}）', pg.inner_text('.gtab-nav h2'))
+    pg.click('[data-action=gtabNav][data-dir="-1"]'); wait_idle(pg, 400)
+    # 月表示：前へ／次へ／今日の単位連動
+    pg.click('[data-action=gtabView][data-v=month]'); wait_idle(pg, 500)
+    pg.click('[data-action=gtabNav][data-dir="-1"]'); wait_idle(pg, 400)
+    pm = TD.replace(day=1) - datetime.timedelta(days=1)
+    check('v1.8.0：月表示の「前へ」は前月', pg.inner_text('.gtab-nav h2') == f'{pm.year}年{pm.month}月', pg.inner_text('.gtab-nav h2'))
+    pg.click('[data-action=gtabNav][data-dir="0"]'); wait_idle(pg, 400)
+    check('v1.8.0：「今日」で今月に戻る', pg.inner_text('.gtab-nav h2') == f'{TD.year}年{TD.month}月', pg.inner_text('.gtab-nav h2'))
+    # 詳細シートからカウントダウンに追加（読み取り専用カレンダーの予定でも可・二重追加防止）
+    pg.click(f'.gtab-cell[data-date="{tdp(1)}"]'); wait_idle(pg, 400)
+    pg.click('.gtab-ev[data-eid="hev_1"]'); wait_idle(pg, 400)
+    check('v1.8.0：読み取り専用の詳細にも「カウントダウンにする」', pg.locator('form[data-form=gcalEvent] [data-action=gevCountdown]').count() == 1)
+    pg.click('form[data-form=gcalEvent] [data-action=gevCountdown]'); wait_idle(pg, 600)
+    check('v1.8.0：詳細からカウントダウンに追加（gcalId でつなぐ）', S(pg, "LifePlan.state.countdowns.filter(c => c.gcalId === 'hev_1').length") == 1)
+    check('v1.8.0：追加後はシートに「カウントダウン中」・ボタンは消える', 'カウントダウン中' in pg.inner_text('form[data-form=gcalEvent]') and pg.locator('form[data-form=gcalEvent] [data-action=gevCountdown]').count() == 0)
+    pg.click('#modal [data-action=closeModal]'); wait_idle(pg, 300)
+    # 範囲外（+300日）の月へ移動すると、その期間分を追加取得する
+    def max_fetch_to():
+        mx = ''
+        for c in gcal_fake.calls:
+            if 'events' not in c or 'q=' in c: continue
+            q = uparse.parse_qs(uparse.urlparse(c.split(' ', 1)[1]).query)
+            if 'timeMax' in q: mx = max(mx, q['timeMax'][0][:10])
+        return mx
+    mx0 = max_fetch_to()
+    far = TD + datetime.timedelta(days=300)
+    gcal_fake.events['far_1'] = {'id': 'far_1', 'summary': '遠い未来の予定', 'start': {'date': far.isoformat()}, 'end': {'date': (far + datetime.timedelta(days=1)).isoformat()}}
+    check('v1.8.0：範囲外の予定はまだ取得していない', S(pg, "LifePlan.calendar.calendar.events.some(e => e.id === 'far_1')") is False and S(pg, "(LifePlan.calendar.extraEvents || []).some(e => e.id === 'far_1')") is False)
+    nclick = (far.year * 12 + far.month) - (TD.year * 12 + TD.month)
+    for _ in range(nclick):
+        pg.click('[data-action=gtabNav][data-dir="1"]'); wait_idle(pg, 250)
+    wait_js(pg, "(LifePlan.calendar.extraEvents || []).some(e => e.id === 'far_1')", 12000); wait_idle(pg, 400)
+    check('v1.8.0：範囲外の月へ移動すると追加取得される', pg.inner_text('.gtab-nav h2') == f'{far.year}年{far.month}月' and max_fetch_to() >= far.isoformat() and max_fetch_to() > mx0, f'{mx0} -> {max_fetch_to()}')
+    pg.click(f'.gtab-cell[data-date="{far.isoformat()}"]'); wait_idle(pg, 400)
+    check('v1.8.0：追加取得した遠い未来の予定が日のリストに出る', '遠い未来の予定' in pg.inner_text('#main'))
+    # スワイプで期間移動（合成 TouchEvent）。縦方向は移動しない
+    pg.click('[data-action=gtabNav][data-dir="0"]'); wait_idle(pg, 500)
+    def gswipe(dx, dy):
+        pg.evaluate("""([dx, dy]) => { const el = document.querySelector('.gtab-view');
+          const mk = (type, x, y) => { const t = new Touch({ identifier: 7, target: el, clientX: x, clientY: y }); return new TouchEvent(type, { touches: type === 'touchend' ? [] : [t], changedTouches: [t], bubbles: true, cancelable: true }); };
+          el.dispatchEvent(mk('touchstart', 300, 300)); el.dispatchEvent(mk('touchend', 300 + dx, 300 + dy)); }""", [dx, dy])
+        wait_idle(pg, 400)
+    gswipe(-120, 5)
+    nm = TD.replace(day=28) + datetime.timedelta(days=5)
+    check('v1.8.0：左スワイプで翌月へ', pg.inner_text('.gtab-nav h2') == f'{nm.year}年{nm.month}月', pg.inner_text('.gtab-nav h2'))
+    gswipe(10, -120)
+    check('v1.8.0：縦スワイプでは移動しない', pg.inner_text('.gtab-nav h2') == f'{nm.year}年{nm.month}月', pg.inner_text('.gtab-nav h2'))
+    gswipe(120, 0)
+    check('v1.8.0：右スワイプで前月へ戻る', pg.inner_text('.gtab-nav h2') == f'{TD.year}年{TD.month}月', pg.inner_text('.gtab-nav h2'))
+    shot(pg, 'v180_calendar.png')
     pg.evaluate("localStorage.removeItem('lifeplan.gcal')")
     # ── v1.7.0：TASK画面（全件表示・折りたたみ）とナビ再編 ──
     tc = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2, locale='ja-JP', timezone_id='Asia/Tokyo', service_workers='block')
@@ -1660,9 +1729,8 @@ with sync_playwright() as p:
     tp.click('.task-row[data-task-row="tk1"] > summary'); wait_idle(tp, 300)
     check('TASK：行を展開すると詳細・操作が見える', tp.evaluate("document.querySelector('.task-row[data-task-row=\"tk1\"]').open") is True and tp.locator('.task-row[data-task-row="tk1"] .card.item').is_visible())
     shot(tp, 'v170_task.png')
-    tp.select_option('select[data-change=wishFilter][data-k=list]', 'inbox'); wait_idle(tp, 400)
-    check('TASK：分類＝未整理で未整理だけ出る（未整理タブ廃止の受け皿）', tp.locator('.task-row').count() == 1 and tp.locator('.task-row[data-task-row="tk4"]').count() == 1)
-    tp.select_option('select[data-change=wishFilter][data-k=list]', ''); wait_idle(tp, 400)
+    # v1.8.0：分類フィルターは廃止（期限フィルターに置換）。未整理の項目は既定表示に出ることで届く
+    check('TASK：分類フィルターは無く、期限フィルターがある', tp.locator('select[data-change=wishFilter][data-k=list]').count() == 0 and tp.locator('select[data-change=wishFilter][data-k=due]').count() == 1 and tp.locator('.task-row[data-task-row="tk4"]').count() == 1)
     # ── v1.7.1：TASK行のスワイプ削除 ──
     sum2 = tp.locator('.task-row[data-task-row="tk2"] > summary')
     sum2.scroll_into_view_if_needed(); wait_idle(tp, 300)
@@ -1691,6 +1759,84 @@ with sync_playwright() as p:
     tp.evaluate("location.hash = '#calendar'"); wait_idle(tp, 500)
     check('カレンダータブ：未連携時は設定への案内', 'Googleカレンダーと連携すると予定が見られます' in tp.inner_text('#main') and tp.locator('#main a[href="#settings/gcal"]').count() == 1)
     tc.close()
+    # ── v1.8.0：カテゴリ2択への正規化と期限フィルター ──
+    kc = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2, locale='ja-JP', timezone_id='Asia/Tokyo', service_workers='block')
+    kp = kc.new_page(); kp.on('pageerror', lambda e: errors.append('CAT ' + str(e)))
+    monday = TD - datetime.timedelta(days=TD.weekday())
+    sunday = monday + datetime.timedelta(days=6)
+    def iso(d): return d.isoformat() if d else ''
+    due_items = [
+        ('k_today', TD), ('k_past', TD - datetime.timedelta(days=3)), ('k_week', sunday),
+        ('k_nextweek', sunday + datetime.timedelta(days=3)), ('k_20', TD + datetime.timedelta(days=20)),
+        ('k_40', TD + datetime.timedelta(days=40)), ('k_none', None)]
+    kseed = {'items': [
+        {'id': 'k_w1', 'list': 'task', 'title': '分類：仕事キャリア', 'category': '仕事/キャリア', 'status': 'todo', 'createdAt': now, 'updatedAt': now},
+        {'id': 'k_w2', 'list': 'task', 'title': '分類：仕事', 'category': '仕事', 'status': 'todo', 'createdAt': now, 'updatedAt': now},
+        {'id': 'k_p1', 'list': 'wish', 'title': '分類：旅行', 'category': '旅行', 'status': 'todo', 'createdAt': now, 'updatedAt': now},
+        {'id': 'k_p2', 'list': 'wish', 'title': '分類：健康', 'category': '健康', 'status': 'todo', 'createdAt': now, 'updatedAt': now},
+        {'id': 'k_p3', 'list': 'later', 'title': '分類：お金', 'category': 'お金', 'status': 'todo', 'createdAt': now, 'updatedAt': now},
+        {'id': 'k_p4', 'list': 'inbox', 'title': '分類：未設定', 'category': '', 'status': 'todo', 'createdAt': now, 'updatedAt': now},
+    ] + [{'id': i_, 'list': 'task', 'title': '期限：' + i_, 'category': '旅行', 'status': 'todo', 'targetDate': iso(d), 'createdAt': now, 'updatedAt': now} for i_, d in due_items],
+        'journal': [], 'habits': [], 'lessons': []}
+    kp.goto(URL); wait_idle(kp, 400)
+    kp.evaluate(f"localStorage.setItem('lifeplan.v1', JSON.stringify({json.dumps(kseed, ensure_ascii=False)}))")
+    kp.reload(); wait_idle(kp, 500)
+    cats = S(kp, "Object.fromEntries(LifePlan.state.items.map(i => [i.id, i.category]))")
+    check('v1.8.0：カテゴリ正規化（仕事/キャリア・仕事 → 仕事）', cats['k_w1'] == '仕事' and cats['k_w2'] == '仕事', cats)
+    check('v1.8.0：カテゴリ正規化（旅行・健康・お金・未設定 → プライベート）', all(cats[k] == 'プライベート' for k in ['k_p1', 'k_p2', 'k_p3', 'k_p4']), cats)
+    check('v1.8.0：カテゴリ一覧は2択に固定', S(kp, 'LifePlan.state.categories') == ['プライベート', '仕事'], S(kp, 'LifePlan.state.categories'))
+    kp.evaluate("location.hash = '#wish'"); wait_idle(kp, 500)
+    catopts = kp.eval_on_selector_all('select[data-change=wishFilter][data-k=cat] option', 'els => els.map(e => e.value)')
+    check('v1.8.0：TASKのカテゴリフィルターは2択＋すべて', catopts == ['', 'プライベート', '仕事'], catopts)
+    kp.select_option('select[data-change=wishFilter][data-k=cat]', '仕事'); wait_idle(kp, 400)
+    check('v1.8.0：カテゴリ＝仕事で仕事だけ出る', sorted(S(kp, "[...document.querySelectorAll('.task-row')].map(e => e.dataset.taskRow)")) == ['k_w1', 'k_w2'])
+    kp.select_option('select[data-change=wishFilter][data-k=cat]', ''); wait_idle(kp, 400)
+    # 編集フォームのカテゴリも2択（「なし」は無い）
+    kp.evaluate("location.hash = '#item/k_p1'"); wait_idle(kp, 400)
+    kp.click('[data-action=editItem]'); wait_idle(kp, 400)
+    edopts = kp.eval_on_selector_all('form[data-form=item] select[name=category] option', 'els => els.map(e => e.value)')
+    check('v1.8.0：編集フォームのカテゴリは2択のみ', edopts == ['プライベート', '仕事'] and kp.input_value('form[data-form=item] select[name=category]') == 'プライベート', edopts)
+    kp.click('#modal [data-action=closeModal]'); wait_idle(kp, 300)
+    # 期限フィルター：各バケットの該当判定（期待値は同じルールで Python 側でも計算）
+    kp.evaluate("location.hash = '#wish'"); wait_idle(kp, 400)
+    dueopts = kp.eval_on_selector_all('select[data-change=wishFilter][data-k=due] option', 'els => els.map(e => e.value)')
+    check('v1.8.0：期限フィルターの選択肢', dueopts == ['', 'today', 'week', 'month', 'over'], dueopts)
+    plain_ids = ['k_w1', 'k_w2', 'k_p1', 'k_p2', 'k_p3', 'k_p4']
+    def expected(f):
+        out = []
+        for i_, d in due_items:
+            if f == '': out.append(i_)
+            elif d is None: pass
+            elif f == 'today' and d <= TD: out.append(i_)
+            elif f == 'week' and d <= sunday: out.append(i_)
+            elif f == 'month' and d <= TD + datetime.timedelta(days=30): out.append(i_)
+            elif f == 'over' and d > TD + datetime.timedelta(days=30): out.append(i_)
+        return sorted(out)
+    for f, label in [('', 'すべて'), ('today', '今日中'), ('week', '今週中'), ('month', '1ヶ月以内'), ('over', '1ヶ月以上')]:
+        kp.select_option('select[data-change=wishFilter][data-k=due]', f); wait_idle(kp, 400)
+        got = sorted(S(kp, "[...document.querySelectorAll('.task-row')].map(e => e.dataset.taskRow)"))
+        exp = sorted(expected(f) + (plain_ids if f == '' else []))
+        check(f'v1.8.0：期限フィルター「{label}」', got == exp, f'{got} != {exp}')
+    kc.close()
+    # ── v1.8.0：マトリクスは見出しなし・ほぼ全画面 ──
+    mc = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2, locale='ja-JP', timezone_id='Asia/Tokyo', service_workers='block')
+    mp = mc.new_page(); mp.on('pageerror', lambda e: errors.append('MX ' + str(e)))
+    mseed = {'items': [{'id': f'mx{n}', 'list': 'task', 'title': f'マトリクス{n}', 'quadrant': 'q1', 'status': 'todo', 'createdAt': now, 'updatedAt': now} for n in range(15)]
+             + [{'id': 'mxq2', 'list': 'task', 'title': 'マトリクスq2', 'quadrant': 'q2', 'status': 'todo', 'createdAt': now, 'updatedAt': now}],
+             'journal': [], 'habits': [], 'lessons': []}
+    mp.goto(URL); wait_idle(mp, 400)
+    mp.evaluate(f"localStorage.setItem('lifeplan.v1', JSON.stringify({json.dumps(mseed, ensure_ascii=False)}))")
+    mp.reload(); wait_idle(mp, 500)
+    mp.evaluate("location.hash = '#matrix'"); wait_idle(mp, 600)
+    check('v1.8.0：マトリクスでは大見出しと説明を出さない', mp.locator('#main .view-head').count() == 0 and '緊急度 × 重要度で整理' not in mp.inner_text('#main'))
+    check('v1.8.0：マトリクス表示中だけ route-matrix クラス', mp.evaluate("document.body.classList.contains('route-matrix')") is True)
+    check('v1.8.0：種別フィルターチップと軸ラベル・象限は残る', mp.locator('.seg-scroll .pill').count() == 5 and '重要' in mp.inner_text('.axis-top') and '緊急' in mp.inner_text('.axis-side') and mp.locator('.quad').count() == 4)
+    wrap = mp.locator('.matrix-wrap').bounding_box(); tab = mp.locator('.tabbar').bounding_box()
+    check('v1.8.0：グリッドがタブバーの上まで広がる', wrap and tab and wrap['height'] > 550 and abs((wrap['y'] + wrap['height']) - tab['y']) < 30, wrap)
+    check('v1.8.0：象限が溢れてもページ全体はスクロールしない（象限内スクロール）', mp.evaluate("getComputedStyle(document.querySelector('.quad-body')).overflowY") == 'auto' and mp.evaluate("document.documentElement.scrollHeight <= window.innerHeight + 1"), mp.evaluate("document.documentElement.scrollHeight"))
+    mp.evaluate("location.hash = '#wish'"); wait_idle(mp, 400)
+    check('v1.8.0：他ビューでは見出しを出し、route-matrix も外れる', mp.locator('#main .view-head').count() >= 1 and mp.evaluate("document.body.classList.contains('route-matrix')") is False)
+    mc.close()
     # ── PC ──
     state_dump = pg.evaluate("localStorage.getItem('lifeplan.v1')")
     # ── Service Worker・オフライン（別コンテキスト：同期のモックと分けるため）──
@@ -1716,7 +1862,7 @@ with sync_playwright() as p:
     nav = sp.evaluate("performance.getEntriesByType('navigation')[0].name")
     check('アップデート：?v=<時刻> で読み込み直す', re.search(r'[?&]v=\d{10,}', nav) is not None and sp.evaluate('window.__beforeUpdate') is None, nav)
     check('アップデート：古いキャッシュを削除', 'lifeplan-old-test' not in sp.evaluate('caches.keys()'))
-    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.7.2' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
+    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.8.0' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
     check('アップデート：Service Worker は引き続き有効', sp.evaluate("navigator.serviceWorker.getRegistration().then(r => !!(r && r.active))"))
     swc.set_offline(True)
     sp.reload(); wait_idle(sp, 1200)

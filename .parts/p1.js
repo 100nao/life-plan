@@ -4,8 +4,11 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.7.2';
-  const DEFAULT_CATEGORIES = ['旅行', '仕事/キャリア', '健康', '家族', '趣味', '学び', 'お金', 'その他'];
+  const APP_VERSION = '1.8.0';
+  // カテゴリは「プライベート」「仕事」の2択に固定（v1.8.0）。読み込み時に normCategory で寄せる
+  const CATEGORIES = ['プライベート', '仕事'];
+  const DEFAULT_CATEGORIES = CATEGORIES;
+  const normCategory = (v) => (v === '仕事' || v === '仕事/キャリア' ? '仕事' : 'プライベート');
   const IMPORTANCE = { high: '高', mid: '中', low: '低' };
   const IMPORTANCE_ORDER = { high: 0, mid: 1, low: 2 };
   const TIMEFRAME = { thisYear: '今年', y1_3: '1〜3年', y5: '5年以内', someday: 'いつか' };
@@ -112,7 +115,7 @@
       list: LISTS[i.list] ? i.list : 'inbox',
       title: String(i.title || '').trim() || '（無題）',
       notes: String(i.notes || ''),
-      category: String(i.category || ''),
+      category: normCategory(i.category),
       importance: IMPORTANCE[i.importance] ? i.importance : 'mid',
       timeframe: TIMEFRAME[i.timeframe] ? i.timeframe : '',
       targetDate: isDateStr(i.targetDate) ? i.targetDate : '',
@@ -205,7 +208,7 @@
   function normalizeState(raw) {
     const s = defaultState();
     if (!raw || typeof raw !== 'object') return s;
-    if (Array.isArray(raw.categories) && raw.categories.length) s.categories = [...new Set(raw.categories.map(String).filter(Boolean))];
+    s.categories = [...CATEGORIES]; // v1.8.0：カテゴリは2択に固定。古いカテゴリ一覧は使わない（アイテム側は normItem で寄せる）
     s.items = (raw.items || []).map(normItem);
     s.lessons = (raw.lessons || []).map(normLesson);
     s.journal = (raw.journal || []).map(normJournal);
@@ -297,7 +300,7 @@
 
   // ───────────────────────── UI の一時状態 ─────────────────────────
   const ui = {
-    wish: { cat: '', imp: '', tf: '', status: 'open', list: '', sort: 'updated' }, // TASK画面のフィルター（分類はすべて、状態の既定は未完了のみ v1.7.1。ui はメモリ上のみで保存されないため、既定変更は更新した端末でそのまま効く）
+    wish: { cat: '', imp: '', tf: '', status: 'open', due: '', sort: 'updated' }, // TASK画面のフィルター（期限はすべて、状態の既定は未完了のみ v1.7.1。ui はメモリ上のみで保存されないため、既定変更は更新した端末でそのまま効く）
     laterSort: 'updated',
     matrixFilter: 'all',
     journalQuery: '',

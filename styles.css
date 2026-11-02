@@ -1133,16 +1133,23 @@ button.hc-day.before:hover { background: var(--surface-2); }
 .gtab-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
 .gtab-grid.dow { margin-bottom: 2px; }
 .gtab-grid.dow span { text-align: center; font-size: 11px; color: var(--muted); font-weight: 700; padding: 2px 0; }
-.gtab-grid.dow span:first-child { color: #d0557c; }
-.gtab-grid.dow span:last-child { color: #4d6fc8; }
-.gtab-cell { appearance: none; border: 0; background: transparent; color: var(--text); font: inherit; border-radius: 10px; padding: 4px 0 3px; min-height: 44px; display: flex; flex-direction: column; align-items: center; gap: 2px; cursor: pointer; }
+.gtab-grid.dow span:nth-child(6) { color: #4d6fc8; }
+.gtab-grid.dow span:last-child { color: #d0557c; }
+.gtab-cell { appearance: none; border: 0; background: transparent; color: var(--text); font: inherit; border-radius: 10px; padding: 3px 3px 4px; min-height: 62px; display: flex; flex-direction: column; align-items: stretch; gap: 2px; cursor: pointer; }
 .gtab-cell.other { opacity: .35; }
-.gtab-cell .gtab-d { font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.gtab-cell .gtab-d { font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; font-size: 12px; text-align: left; padding-left: 2px; }
 .gtab-cell.today .gtab-d { color: #d0557c; font-weight: 800; }
 .gtab-cell.sel { background: var(--primary-soft); }
 .gtab-cell.sel .gtab-d { color: var(--primary-strong); font-weight: 800; }
-.gtab-dots { display: flex; gap: 3px; height: 6px; }
-.gtab-dots i { width: 6px; height: 6px; border-radius: 50%; display: block; }
+.gtab-chips { display: flex; flex-direction: column; gap: 2px; width: 100%; min-height: 13px; }
+.gtab-chip { display: block; font-size: 9.5px; line-height: 1.45; font-weight: 600; color: #fff; border-radius: 4px; padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+.gtab-more { font-size: 9.5px; color: var(--muted); text-align: left; padding: 0 2px; }
+.gtab-seg { display: flex; gap: 6px; margin-bottom: 10px; }
+.gtab-seg .pill { flex: 1; }
+.gtab-wday { border-top: 1px solid var(--border); padding: 8px 0 6px; }
+.gtab-wday:first-child { border-top: 0; padding-top: 2px; }
+.gtab-whead { appearance: none; border: 0; background: transparent; color: var(--text); font: inherit; display: flex; align-items: baseline; gap: 8px; padding: 2px 0 4px; cursor: pointer; }
+.gtab-wday.today .gtab-whead b { color: #d0557c; }
 .gtab-legend { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 10px; }
 .gtab-cal { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
 .gtab-cal i { width: 9px; height: 9px; border-radius: 3px; display: block; }
@@ -1169,3 +1176,19 @@ button.hc-day.before:hover { background: var(--surface-2); }
 .task-row-wrap.swiped .task-row { transform: translateX(-76px); }
 .task-row > summary { touch-action: pan-y; }
 .task-row-del { position: absolute; top: 0; right: 0; bottom: 0; width: 76px; z-index: 0; border: 0; border-radius: var(--radius); background: var(--danger); color: #fff; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+
+/* v1.8.0：マトリクスはほぼ全画面（見出しなし。フィルターの下から下部タブバーの上までグリッドが使い切る） */
+body.route-matrix .fab { display: none; }
+body.route-matrix .tray { flex: none; max-height: 36%; overflow-y: auto; } /* 未分類トレイがグリッドを潰さないよう上限＋内部スクロール */
+body.route-matrix .matrix-wrap { flex: 1; min-height: 0; }
+body.route-matrix .matrix { min-height: 0; }
+body.route-matrix .quad { min-height: 0; }
+body.route-matrix .quad-body { overflow-y: auto; min-height: 0; }
+@media (max-width: 959.98px) {
+  body.route-matrix .app { display: flex; flex-direction: column; height: 100dvh; }
+  body.route-matrix .main { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; overflow: hidden; padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 10px); }
+}
+@media (min-width: 960px) {
+  body.route-matrix .app { height: 100vh; height: 100dvh; }
+  body.route-matrix .main { height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding-bottom: 24px; }
+}

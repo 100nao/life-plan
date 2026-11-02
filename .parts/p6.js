@@ -228,13 +228,13 @@
     gevNew: () => openGcalEventEditor(),
     gevOpen: (d) => openGcalEventEditor(d.cid, d.eid),
     gevDelete: (d) => deleteGcalEvent(d.cid, d.eid),
+    // v1.8.0：詳細シートからカウントダウンに追加（既存の countdownFromEvent を再利用）。追加後はシートを開き直して「カウントダウン中」表示にする
+    gevCountdown: (d) => { countdownFromEvent(d.id); openGcalEventEditor(d.cid, d.eid); },
     gtabDay: (d) => { gtab.day = d.date; gtab.month = d.date.slice(0, 7); rerender(); },
-    gtabMonth: (d) => {
-      const dir = Number(d.dir) || 0;
-      if (dir === 0) { const t = todayStr(); gtab.month = t.slice(0, 7); gtab.day = t; }
-      else { const [y, m] = gtab.month.split('-').map(Number); gtab.month = monthKey(new Date(y, m - 1 + dir, 1)); }
-      rerender();
-    },
+    gtabDayView: (d) => { gtab.day = d.date; gtab.month = d.date.slice(0, 7); gtab.view = 'day'; rerender(); },
+    gtabNav: (d) => gtabMove(Number(d.dir) || 0),
+    gtabView: (d) => { gtab.view = ['month', 'week', 'day'].includes(d.v) ? d.v : 'month'; rerender(); },
+    gtabMonth: (d) => { gtab.view = 'month'; gtabMove(Number(d.dir) || 0); }, // v1.7.x 互換（ボタンは gtabNav に移行済み）
     gcalConnect: () => gcalConnectInteractive(),
     gcalRefresh: async () => { try { await pullCalendar(true); rerender(); toast('Googleカレンダーを取得しました ✓'); } catch (e) { toast('⚠️ ' + (e.message || e)); } },
     gcalDisconnect: async () => {

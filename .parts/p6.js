@@ -6,9 +6,10 @@
     quickAdd: (d) => openQuickAdd({ list: d.list, quadrant: d.quadrant }),
     quickAddDetail: () => { const f = $('form[data-form=quickAdd]', modalBox); if (f && f.title.value.trim()) submitQuickAdd(f, true); else if (f) f.title.focus(); },
     closeModal: () => closeModal(),
-    back: () => { if (history.length > 1) history.back(); else go('#home'); },
+    back: () => { if (history.length > 1) history.back(); else go('#habits'); },
     openItem: (d) => { closeModal(); go('#item/' + d.id); },
     editItem: (d) => openItemEditor(d.id),
+    focusStepAdd: () => { const inp = $('.add-step input'); if (inp) { inp.scrollIntoView({ block: 'center', behavior: 'smooth' }); setTimeout(() => { try { inp.focus({ preventScroll: true }); } catch (e) { inp.focus(); } }, 300); } },
     toggleDone: (d) => {
       const i = getItem(d.id); if (!i) return;
       const snap = snapshot();
@@ -23,7 +24,7 @@
       markDeleted(d.id);
       state.journal.forEach((e) => { if (e.linked.includes(d.id)) { e.linked = e.linked.filter((id) => id !== d.id); e.updatedAt = nowIso(); } });
       save(); closeModal();
-      if (route().name === 'item') go('#' + ({ task: 'matrix', inbox: 'inbox', later: 'later', wish: 'wish' }[i.list] || 'home')); else rerender();
+      if (route().name === 'item') go('#' + ({ task: 'matrix', inbox: 'inbox', later: 'later', wish: 'wish' }[i.list] || 'habits')); else rerender();
       undoable('削除しました', snap);
     },
     moveTo: (d) => {
@@ -163,7 +164,7 @@
       SYNC_COLLECTIONS.forEach((k) => state[k].forEach((x) => { del[x.id] = nowIso(); }));
       const theme = state.settings.theme;
       state = defaultState(); state.deleted = del; state.settings.theme = theme; state.categoriesAt = nowIso();
-      save(); applyTheme(); go('#home'); undoable('すべて削除しました', snap);
+      save(); applyTheme(); go('#habits'); undoable('すべて削除しました', snap);
     },
     syncNow: async () => { if (!navigator.onLine) { toast('オフラインです'); return; } await syncNow(); toast(sync.lastError ? '⚠️ ' + sync.lastError : '同期しました ✓'); },
     // ヘッダーの更新ボタン：GitHub 同期とカレンダー取得（カレンダー一覧も取り直す）をまとめて実行する
@@ -230,7 +231,19 @@
     gevDelete: (d) => deleteGcalEvent(d.cid, d.eid),
     // v1.8.0：詳細シートからカウントダウンに追加（既存の countdownFromEvent を再利用）。追加後はシートを開き直して「カウントダウン中」表示にする
     gevCountdown: (d) => { countdownFromEvent(d.id); openGcalEventEditor(d.cid, d.eid); },
-    gtabDay: (d) => { gtab.day = d.date; gtab.month = d.date.slice(0, 7); rerender(); },
+    gtabDay: (d) => { // v1.8.1：同じ日を 350ms 以内に2回タップしたら日表示（タイムライン）へ。1回目のタップは従来通り選択のみ（遅延なし）
+      const now = Date.now();
+      const dbl = gtab.lastTap && gtab.lastTap.date === d.date && now - gtab.lastTap.t < 350;
+      gtab.day = d.date; gtab.month = d.date.slice(0, 7);
+      if (dbl) { gtab.view = 'day'; gtab.lastTap = null; } else gtab.lastTap = { date: d.date, t: now };
+      rerender();
+    },
+    gtabCol: (d) => { // v1.8.1：週タイムグリッドの列（予定のない場所）のダブルタップでその日の日表示へ。シングルタップでは何もしない
+      const now = Date.now();
+      if (gtab.lastTap && gtab.lastTap.date === d.date && now - gtab.lastTap.t < 350) {
+        gtab.day = d.date; gtab.month = d.date.slice(0, 7); gtab.view = 'day'; gtab.lastTap = null; rerender();
+      } else gtab.lastTap = { date: d.date, t: now };
+    },
     gtabDayView: (d) => { gtab.day = d.date; gtab.month = d.date.slice(0, 7); gtab.view = 'day'; rerender(); },
     gtabNav: (d) => gtabMove(Number(d.dir) || 0),
     gtabView: (d) => { gtab.view = ['month', 'week', 'day'].includes(d.v) ? d.v : 'month'; rerender(); },
@@ -448,6 +461,74 @@
     const q = z.dataset.drop === 'none' ? '' : z.dataset.drop;
     const id = dragId; dragId = null;
     setQuadrant(id, q);
+  });
+
+  // モバイル：マトリクスのカードを「長押し→ドラッグ」でも象限移動できるようにする（v1.8.2）。
+  // HTML5 の draggable はタッチで動かないための補完。長押し（280ms・ほぼ静止）が成立するまでは
+  // 通常のスクロールを妨げず、成立後は touchmove を preventDefault してスクロールを止め、
+  // カードのゴーストを指に追随させる。ドロップ先は PC 版と同じ [data-drop] ゾーン＋ setQuadrant。
+  // ドラッグ直後に発生する click（詳細を開く等）は飲み込む。
+  let tdrag = null;
+  let tdragSwallowUntil = 0;
+  const tdPoint = (e) => { const t = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]); return t ? { x: t.clientX, y: t.clientY } : null; };
+  const tdZoneAt = (x, y) => { const el = document.elementFromPoint(x, y); return el && el.closest ? el.closest('[data-drop]') : null; };
+  function tdClear() {
+    if (!tdrag) return;
+    clearTimeout(tdrag.timer);
+    if (tdrag.ghost) tdrag.ghost.remove();
+    if (tdrag.card) tdrag.card.classList.remove('dragging');
+    $$('.drop-over').forEach((x) => x.classList.remove('drop-over'));
+    tdrag = null;
+  }
+  document.addEventListener('touchstart', (e) => {
+    if (tdrag || e.touches.length !== 1) return;
+    const card = e.target.closest && e.target.closest('.card.item[data-id]');
+    if (!card || !card.closest('.quad, .tray')) return;
+    if (e.target.closest('button, a, input, select, textarea, summary, label')) return; // カード内の操作部品からは始めない
+    const p = tdPoint(e); if (!p) return;
+    const t = { id: card.dataset.id, card, x: p.x, y: p.y, active: false, ghost: null, dx: 0, dy: 0, timer: 0 };
+    t.timer = setTimeout(() => {
+      if (tdrag !== t) return;
+      t.active = true;
+      card.classList.add('dragging');
+      const r = card.getBoundingClientRect();
+      const g = card.cloneNode(true);
+      g.removeAttribute('id'); g.removeAttribute('draggable');
+      g.classList.add('drag-ghost'); g.classList.remove('dragging');
+      g.style.width = r.width + 'px'; g.style.left = r.left + 'px'; g.style.top = r.top + 'px';
+      document.body.appendChild(g);
+      t.ghost = g; t.dx = t.x - r.left; t.dy = t.y - r.top;
+      if (navigator.vibrate) { try { navigator.vibrate(10); } catch (err) { /* noop */ } }
+    }, 280);
+    tdrag = t;
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (!tdrag) return;
+    const p = tdPoint(e); if (!p) return;
+    if (!tdrag.active) { if (Math.hypot(p.x - tdrag.x, p.y - tdrag.y) > 10) tdClear(); return; } // 長押し前に動いたらスクロールに譲る
+    e.preventDefault();
+    if (tdrag.ghost) { tdrag.ghost.style.left = (p.x - tdrag.dx) + 'px'; tdrag.ghost.style.top = (p.y - tdrag.dy) + 'px'; }
+    const z = tdZoneAt(p.x, p.y);
+    $$('.drop-over').forEach((x) => x !== z && x.classList.remove('drop-over'));
+    if (z) z.classList.add('drop-over');
+  }, { passive: false });
+  const tdEnd = (e) => {
+    if (!tdrag) return;
+    const wasActive = tdrag.active; const id = tdrag.id; const p = tdPoint(e);
+    const z = wasActive && p ? tdZoneAt(p.x, p.y) : null;
+    tdClear();
+    if (wasActive) {
+      tdragSwallowUntil = Date.now() + 500;
+      if (z) setQuadrant(id, z.dataset.drop === 'none' ? '' : z.dataset.drop);
+    }
+  };
+  document.addEventListener('touchend', tdEnd);
+  document.addEventListener('touchcancel', tdClear);
+  document.addEventListener('click', (e) => {
+    if (Date.now() < tdragSwallowUntil && e.target.closest && e.target.closest('.quad, .tray')) { e.preventDefault(); e.stopPropagation(); }
+  }, true);
+  document.addEventListener('contextmenu', (e) => {
+    if (tdrag && tdrag.active && e.target.closest && e.target.closest('.quad, .tray')) e.preventDefault();
   });
 
   // ───────────────────────── テーマ・起動 ─────────────────────────

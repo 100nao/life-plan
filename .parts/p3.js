@@ -115,7 +115,7 @@
   // ───────────────────────── 画面: 項目の詳細（ステップ） ─────────────────────────
   function viewItem(id) {
     const i = getItem(id);
-    if (!i) return sectionHead('見つかりません') + '<p class="muted">この項目は削除されたようです。</p><a class="btn soft" href="#home">ホームへ</a>';
+    if (!i) return sectionHead('見つかりません') + '<p class="muted">この項目は削除されたようです。</p><a class="btn soft" href="#habits">週間スタンプへ</a>';
     const total = i.steps.length; const done = stepsDone(i);
     const nextIdx = i.steps.findIndex((s) => !s.done);
     const stuck = isStuck(i);
@@ -131,6 +131,11 @@
         <div><span class="muted small">作成</span><b>${isoToDate(i.createdAt).replace(/-/g, '/')}</b><span class="muted small">${daysSince(i.createdAt)}日前</span></div>
         <div><span class="muted small">最後の進捗</span><b>${i.lastProgressAt ? isoToDate(i.lastProgressAt).replace(/-/g, '/') : 'まだなし'}</b><span class="muted small">${idleDays(i)}日経過</span></div>
         <div><span class="muted small">状態</span><b>${STATUS[i.status]}</b><span class="muted small">${stuck ? '⚠️ 停滞中' : i.status === 'done' ? '🎉' : '順調'}</span></div>
+      </div>
+      <div class="detail-actions">
+        <button class="btn soft small" data-action="focusStepAdd" data-id="${i.id}">＋ ステップ追加</button>
+        <button class="btn soft small" data-action="editItem" data-id="${i.id}">${ICON.edit} 編集</button>
+        <button class="btn soft small" data-action="toggleDone" data-id="${i.id}">${i.status === 'done' ? '↩ 未完了に戻す' : '✓ 完了にする'}</button>
       </div>
     </section>`);
 
@@ -446,16 +451,6 @@
         <span class="grow"><b class="hr-title">${esc(h.emoji)} ${esc(h.name)}</b><span class="hr-sub"><span class="hr-lv">Lv.${i.lv}</span> ${esc(i.name)}</span><span class="hr-sub">連続 ${i.streak}日・累計 ${i.total}日</span></span></a>
       <button class="stamp-btn ${i.doneToday ? 'on' : i.missedToday ? 'is-x' : ''}" data-action="habitToggle" data-id="${h.id}" aria-pressed="${i.doneToday}" aria-label="${esc(h.name)}：${i.doneToday ? '今日のスタンプを取り消す' : '今日のスタンプを押す'}">${i.missedToday ? STAMP_XM : STAMP_O}<span>${i.doneToday ? '済' : i.missedToday ? '' : '押す'}</span></button>
     </div>`;
-  }
-  function homeHabitsCard() {
-    if (!state.habits.length) {
-      return `<a class="card habit-invite" href="#habits"><img src="${pomuImg('stage-1', true)}" alt="" width="256" height="256" loading="lazy"><span class="grow"><b>毎日の目標スタンプ</b><span class="muted small">毎日つづけるほど、ぽむが育ちます。タップして始める</span></span></a>`;
-    }
-    const n = state.habits.filter((h) => habitStats(h).doneToday).length;
-    return `<section class="card habits-home">
-      <div class="card-head"><h2>🐣 今日のスタンプ <span class="count ${n === state.habits.length ? 'all' : ''}">${n}/${state.habits.length}</span></h2><a class="link" href="#habits">すべて見る</a></div>
-      <div class="habit-list">${state.habits.map(habitRow).join('')}</div>
-    </section>`;
   }
   function viewHabits(arg) {
     checkPomuChanges();

@@ -1350,23 +1350,6 @@
     return `<p class="ana-summary">${esc(a.summary)}</p>${a.insights.length ? `<ul class="ana-insights">${a.insights.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}`;
   }
   // ホームの「✨ 今日の分析」
-  function homeAnalysisCard() {
-    if (!ai.key && !state.aiAnalyses.length && !openSuggestions().length) return '';
-    const a = latestAnalysis(); const open = openSuggestions(); const t = todayStr();
-    const left = manualLeft();
-    const head = `<div class="card-head"><h2>✨ 今日の分析${a && a.date !== t ? `<span class="muted small"> ${fmtShort(a.date)}</span>` : ''}</h2>
-      <button class="icon-btn small" data-action="anaCollapse" aria-expanded="${!aiDaily.collapsed}" aria-label="${aiDaily.collapsed ? '開く' : 'たたむ'}">${aiDaily.collapsed ? '▾' : '▴'}</button></div>`;
-    const link = `<a class="btn soft small ana-link" href="#aisuggest">🤖 AI提案を見る（${open.length}件）</a>`;
-    if (aiDaily.collapsed) return `<section class="card ana-card collapsed" id="anaCard">${head}<div class="btn-row">${link}</div></section>`;
-    let body = '';
-    if (anaUi.busy) body = '<p class="ana-busy"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span> Gemini が分析しています…</p>';
-    else if (a) body = analysisBody(a) + (open.length ? `<ul class="ana-preview">${open.slice(0, 2).map((s) => `<li><span class="qdot ${s.quadrant}" aria-hidden="true"></span>${esc(s.title)}</li>`).join('')}${open.length > 2 ? `<li class="muted small">ほか ${open.length - 2}件</li>` : ''}</ul>` : '');
-    else body = `<p class="muted small">${ai.key ? (aiDailyOn() ? '今日の分析はまだです。' : '毎日の自動分析はオフです。') : 'Gemini の APIキーを設定すると、毎日の分析が届きます。'}</p>`;
-    if (anaUi.error) body += `<p class="error-text small">⚠️ ${esc(anaUi.error)}</p>`;
-    return `<section class="card ana-card" id="anaCard">${head}${body}
-      <div class="btn-row">${link}${ai.key ? `<button class="btn ghost small" data-action="anaRerun" ${anaUi.busy || left <= 0 ? 'disabled' : ''}>🔁 もう一度分析<span class="muted small">（あと${Math.max(0, left)}回）</span></button>` : ''}</div>
-    </section>`;
-  }
   // 画面：🤖 AI提案
   function viewAiSuggest() {
     const open = openSuggestions().sort((a, b) => b.date.localeCompare(a.date) || (a.createdAt || '').localeCompare(b.createdAt || ''));
@@ -1712,21 +1695,48 @@
     return `<b class="cd-num past">${(-n).toLocaleString('ja-JP')}</b><span class="cd-unit">日経過</span>`;
   }
   const cdText = (n) => (n === 0 ? '今日！' : n > 0 ? `あと${n}日` : `${-n}日経過`);
-  function cdProgress(c) {
-    const start = isoToDate(c.createdAt) || todayStr();
-    const total = -daysUntil(start) + cdDays(c); // 作成日 → 目標日
-    const done = -daysUntil(start);
-    const pct = total <= 0 ? 100 : Math.max(0, Math.min(100, Math.round((done / total) * 100)));
-    return { pct, start };
+  // ── ドットグリッド（v1.8.1）：作成日→対象日を 1マス＝1日で並べる。経過（作成日〜今日）＝グレー、
+  // 残り（明日〜前日）＝水色、対象日＝オレンジ。総日数が 210 を超えたら 1マス＝1週間に切り替える。
+  // 作成日が無い/対象日より後などの不整合時は「残りのみ」等に倒して壊れないようにする。
+  function cdGridModel(c) {
+    const target = c.date;
+    if (!isDateStr(target)) return null;
+    const today = todayStr();
+    const created = isoToDate(c.createdAt);
+    let start = isDateStr(created) ? created : '';
+    if (!start || start > target) start = today < target ? addDays(today, 1) : target; // 欠落・不整合時：残りのみ（対象が過ぎていれば当日マスのみ）
+    if (start > target) start = target;
+    const span = daysUntil(target) - daysUntil(start); // 開始日→対象日の日数（0以上）
+    const weekly = span + 1 > 210;
+    const cells = [];
+    if (!weekly) {
+      for (let i = 0; i <= span; i++) {
+        const d = addDays(start, i);
+        cells.push(d === target ? 'goal' : d <= today ? 'done' : 'left');
+      }
+    } else {
+      const weeks = Math.ceil((span + 1) / 7);
+      for (let w = 0; w < weeks; w++) {
+        if (w === weeks - 1) { cells.push('goal'); continue; } // 最終マス（対象日を含む週）はオレンジ
+        cells.push(addDays(start, w * 7 + 6) <= today ? 'done' : 'left'); // まるごと経過した週だけグレー
+      }
+    }
+    return { cells, weekly };
+  }
+  function cdGridHtml(c) {
+    const m = cdGridModel(c);
+    if (!m) return '';
+    const done = m.cells.filter((x) => x === 'done').length;
+    const left = m.cells.filter((x) => x === 'left').length;
+    return `<div class="cd-grid ${m.weekly ? 'weekly' : ''}" role="img" aria-label="作成日から対象日まで${m.weekly ? `（1マス＝1週間・全${m.cells.length}マス）` : `（全${m.cells.length}日）`}：経過 ${done}・残り ${left}・対象日 1">${m.cells.map((k) => `<span class="cd-dot ${k}"></span>`).join('')}</div>`;
   }
   function countdownCard(c) {
-    const n = cdDays(c); const pr = cdProgress(c); const t = c.taskId ? getItem(c.taskId) : null; const gs = c.readOnly ? null : cdGcalStatus(c);
+    const n = cdDays(c); const t = c.taskId ? getItem(c.taskId) : null; const gs = c.readOnly ? null : cdGcalStatus(c);
     return `<article class="card cd-card ${n === 0 ? 'is-today' : n < 0 ? 'is-past' : ''} ${c.readOnly ? 'is-google' : ''}" data-cd="${c.id}">
       <div class="cd-top"><span class="cd-emoji" aria-hidden="true">${esc(c.emoji || '⏳')}</span>
         <div class="cd-main"><h3 class="cd-title">${esc(c.title)}${c.readOnly ? ' <span class="chip g-badge">Google</span>' : ''}</h3><p class="cd-date">${fmtDate(c.date)}</p></div>
         <div class="cd-count" aria-label="${cdText(n)}">${cdLabel(n)}</div></div>
-      ${n >= 0 && !c.readOnly ? `<div class="cd-bar" role="progressbar" aria-valuenow="${pr.pct}" aria-valuemin="0" aria-valuemax="100" aria-label="作成日からの進み具合"><span style="width:${pr.pct}%"></span></div>
-      <div class="cd-bar-meta muted small"><span>${fmtShort(pr.start)} から</span><span>${pr.pct}%</span></div>` : ''}
+      ${cdGridHtml(c)}
       ${c.memo ? `<p class="cd-memo">${esc(c.memo)}</p>` : ''}
       ${t ? `<a class="cd-link small" href="#item/${t.id}">🔗 ${esc(trunc(t.title, 30))}</a>` : ''}
       ${gs ? `<p class="cd-gcal ${gs.cls} small">${gs.text}</p>` : ''}
@@ -1756,7 +1766,7 @@
   // 全カレンダーの予定を見て、その場で追加・編集・削除する（Google Calendar API 直接）。
   // 予定データは cal.calendar.events（基本範囲：過去30日〜未来180日・全カレンダー分・calendarId と色つき）
   // ＋ cal.extraEvents（表示範囲が基本範囲の外に出たときに追加取得した分）。
-  const gtab = { month: '', day: '', view: 'month' }; // view: 'month' | 'week' | 'day'（既定は月）
+  const gtab = { month: '', day: '', view: 'month', lastTap: null, tgKey: '', tgPos: null }; // view: 'month' | 'week' | 'day'（既定は月）。lastTap はダブルタップ判定、tgKey/tgPos はタイムグリッドのスクロール位置管理
   function gtabInit() { const t = todayStr(); if (!gtab.day) gtab.day = t; if (!gtab.month) gtab.month = t.slice(0, 7); }
   const gtabEvents = () => calEvents();
   function mondayOf(ds) { const d = new Date(ds + 'T00:00:00'); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return todayStr(d); }
@@ -1776,6 +1786,85 @@
     if (!list.length) return '<p class="muted small">この日の予定はありません</p>';
     return `<ul class="plain-list">${list.map((e) => { const cm = gcalCalendarById(e.calendarId); const ro = !gcalWritableCal(cm); return `<li><button type="button" class="gtab-ev" data-action="gevOpen" data-cid="${esc(e.calendarId)}" data-eid="${esc(e.id)}"><span class="gtab-dot" style="background:${esc(e.color || (cm && cm.color) || '#4285f4')}"></span><span class="gtab-time">${esc(gevTimeLabel(e))}</span><span class="grow"><b>${esc(trunc(e.title, 40))}</b><span class="muted small"> ${esc(cm ? cm.summary : '')}${e.location ? '・' + esc(trunc(e.location, 20)) : ''}</span></span>${ro ? '<span class="chip">閲覧のみ</span>' : ''}</button></li>`; }).join('')}</ul>`;
   }
+  // ── 週・日表示のタイムグリッド（v1.8.1：Google カレンダーの週表示と同じ時間軸形式）──
+  // 週＝7列・日＝1列で描画を共用する。上に曜日・日付ヘッダー（今日は丸くハイライト）と終日の帯、
+  // 下に 0:00–24:00 の時間軸グリッド（縦スクロール）。予定は開始〜終了に応じた位置・長さのブロックで、
+  // 重なる場合は横並びに割り当てる。週の日見出しタップは従来通り gtabDayView でその日の日表示へ。
+  const TG_H = 48; // 1時間の高さ(px)
+  const tgMinOf = (iso) => { const d = new Date(iso); return isNaN(d) ? null : d.getHours() * 60 + d.getMinutes(); };
+  function tgBlocksHtml(day, evs) {
+    const timed = [];
+    evs.forEach((e) => {
+      if (e.allDay || !gevOnDay(e, day)) return;
+      const s = tgMinOf(e.start); if (s == null) return;
+      let en = e.end ? tgMinOf(e.end) : null;
+      if (en == null) en = s + 60;
+      if (e.end && String(e.end).slice(0, 10) > day) en = 1440; // 日をまたぐ予定はその日の終わりまで
+      if (en <= s) en = s + 30;
+      timed.push({ e, s, en: Math.min(en, 1440) });
+    });
+    timed.sort((a, b) => a.s - b.s || (b.en - b.s) - (a.en - a.s));
+    // 重なりの塊ごとに列を割り当てる（簡易レイアウト）
+    const placed = [];
+    let cluster = [], clusterEnd = -1;
+    const flush = () => {
+      if (!cluster.length) return;
+      const ends = [];
+      cluster.forEach((it) => { let ci = ends.findIndex((x) => x <= it.s); if (ci < 0) { ends.push(it.en); ci = ends.length - 1; } else ends[ci] = it.en; it.col = ci; });
+      cluster.forEach((it) => { it.cols = ends.length; placed.push(it); });
+      cluster = []; clusterEnd = -1;
+    };
+    timed.forEach((it) => { if (cluster.length && it.s >= clusterEnd) flush(); cluster.push(it); clusterEnd = Math.max(clusterEnd, it.en); });
+    flush();
+    return placed.map(({ e, s, en, col, cols }) => {
+      const cm = gcalCalendarById(e.calendarId);
+      const top = (s / 60) * TG_H, h = Math.max(16, ((en - s) / 60) * TG_H - 2);
+      return `<button type="button" class="gtab-tgev" data-action="gevOpen" data-cid="${esc(e.calendarId)}" data-eid="${esc(e.id)}" style="top:${top}px;height:${h}px;left:${(col * 100) / cols}%;width:${100 / cols}%;background:${esc(e.color || (cm && cm.color) || '#4285f4')}" aria-label="${esc(e.title)} ${esc(gevTimeLabel(e))}"><b>${esc(e.title)}</b><span>${esc(gevTimeLabel(e))}</span></button>`;
+    }).join('');
+  }
+  function gtabTimeGridHtml(days, evs) {
+    const today = todayStr();
+    const n = days.length;
+    const heads = days.map((ds) => {
+      const wd = '月火水木金土日'[(new Date(ds + 'T00:00:00').getDay() + 6) % 7];
+      const inner = `<span class="gtab-tg-wd">${wd}</span><span class="gtab-tg-dn ${ds === today ? 'today' : ''}">${Number(ds.slice(8, 10))}</span>`;
+      return n > 1
+        ? `<button type="button" class="gtab-tg-head" data-action="gtabDayView" data-date="${ds}" aria-label="${ds}の日表示">${inner}</button>`
+        : `<div class="gtab-tg-head">${inner}</div>`;
+    }).join('');
+    const ads = days.map((ds) => {
+      const list = evs.filter((e) => e.allDay && gevOnDay(e, ds)).sort(gevSort);
+      return `<div class="gtab-tg-adcol">${list.map((e) => { const cm = gcalCalendarById(e.calendarId); return `<button type="button" class="gtab-tg-ad" data-action="gevOpen" data-cid="${esc(e.calendarId)}" data-eid="${esc(e.id)}" style="background:${esc(e.color || (cm && cm.color) || '#4285f4')}">${esc(trunc(e.title, n > 1 ? 10 : 30))}</button>`; }).join('')}</div>`;
+    }).join('');
+    const hours = Array.from({ length: 24 }, (_, h) => `<span class="gtab-tg-hour" style="top:${h * TG_H + 2}px">${h}:00</span>`).join('');
+    const now = new Date(); const nowTop = ((now.getHours() * 60 + now.getMinutes()) / 60) * TG_H;
+    const cols = days.map((ds) => `<div class="gtab-tg-col" data-action="gtabCol" data-date="${ds}">${ds === today ? `<span class="gtab-nowline" style="top:${nowTop}px"></span>` : ''}${tgBlocksHtml(ds, evs)}</div>`).join('');
+    return `<div class="gtab-tg ${n > 1 ? 'week' : 'day'}">
+      <div class="gtab-tg-headrow"><div class="gtab-tg-gut"></div><div class="gtab-tg-heads" style="grid-template-columns:repeat(${n},minmax(0,1fr))">${heads}</div></div>
+      <div class="gtab-tg-adrow"><div class="gtab-tg-gut"><span>終日</span></div><div class="gtab-tg-ads" style="grid-template-columns:repeat(${n},minmax(0,1fr))">${ads}</div></div>
+      <div class="gtab-tg-scroll"><div class="gtab-tg-body"><div class="gtab-tg-gutcol">${hours}</div><div class="gtab-tg-cols" style="grid-template-columns:repeat(${n},minmax(0,1fr))">${cols}</div></div></div>
+    </div>`;
+  }
+  // タイムグリッドの初期スクロール：表示期間が変わったときは 8時付近（今日を含む表示では現在時刻付近）へ。
+  // render()（p4）からカレンダー表示のたびに呼ばれる。再描画でスクロール要素が差し替わっても、
+  // 同じ期間なら直前のスクロール位置（下のリスナーが記録）を復元し、ユーザーのスクロールを邪魔しない
+  function positionTgScroll() {
+    const sc = document.querySelector('.gtab-tg-scroll');
+    if (!sc) return;
+    const key = gtab.view + '|' + (gtab.view === 'week' ? mondayOf(gtab.day) : gtab.day);
+    if (gtab.tgKey !== key) {
+      gtab.tgKey = key;
+      const today = todayStr();
+      const hasToday = gtab.view === 'week' ? (mondayOf(gtab.day) <= today && today <= addDays(mondayOf(gtab.day), 6)) : gtab.day === today;
+      let target = 8 * TG_H - 4;
+      if (hasToday) { const n = new Date(); target = ((n.getHours() * 60 + n.getMinutes()) / 60) * TG_H - 110; }
+      gtab.tgPos = Math.max(0, Math.min(target, Math.max(0, sc.scrollHeight - sc.clientHeight)));
+    }
+    if (gtab.tgPos != null) sc.scrollTop = gtab.tgPos;
+  }
+  document.addEventListener('scroll', (e) => {
+    if (e.target && e.target.classList && e.target.classList.contains('gtab-tg-scroll')) gtab.tgPos = e.target.scrollTop;
+  }, true);
   // 前へ／次へ／今日：表示単位（月・週・日）に連動する。スワイプ（下記）とボタンで共用
   function gtabMove(dir) {
     gtabInit();
@@ -1893,15 +1982,10 @@
       ${legend ? `<div class="gtab-legend">${legend}</div>` : ''}`;
     } else if (view === 'week') {
       const mon = mondayOf(gtab.day);
-      let blocks = '';
-      for (let i = 0; i < 7; i++) {
-        const ds = addDays(mon, i);
-        const cnt = evs.filter((e) => gevOnDay(e, ds)).length;
-        blocks += `<div class="gtab-wday ${ds === today ? 'today' : ''}"><button type="button" class="gtab-whead" data-action="gtabDayView" data-date="${ds}" aria-label="${ds}の日表示"><b>${Number(ds.slice(5, 7))}/${Number(ds.slice(8, 10))}（${'月火水木金土日'[i]}）</b><span class="muted small">${cnt}件</span></button>${gtabDayListHtml(ds, evs)}</div>`;
-      }
-      bodyHtml = `<div class="gtab-week">${blocks}</div>`;
+      const days = Array.from({ length: 7 }, (_, i) => addDays(mon, i));
+      bodyHtml = `<div class="gtab-week">${gtabTimeGridHtml(days, evs)}</div>`;
     } else {
-      bodyHtml = `<div class="gtab-dayview">${gtabDayListHtml(gtab.day, evs)}</div>`;
+      bodyHtml = `<div class="gtab-dayview">${gtabTimeGridHtml([gtab.day], evs)}</div>`;
     }
     out.push(`<div class="gtab-view"><section class="card gtab-card">
       <div class="gtab-nav"><button type="button" class="btn ghost small" data-action="gtabNav" data-dir="-1" aria-label="前の${unit}">‹</button><h2>${esc(title)}</h2><span class="btn-row"><button type="button" class="btn ghost small" data-action="gtabNav" data-dir="0">今日</button><button type="button" class="btn ghost small" data-action="gtabNav" data-dir="1" aria-label="次の${unit}">›</button></span></div>
@@ -1914,8 +1998,10 @@
     return out.join('');
   }
   // カレンダー表示の左右スワイプで前／次の期間へ（v1.8.0）。横移動が縦より大きく 60px を超えたときだけ。
-  // ドロワーのスワイプとは p4 の swipeBlocked（.gtab-view 内から始めた操作を除外）で競合回避し、
-  // スワイプ直後の click（セル選択など）は飲み込んで誤作動を防ぐ
+  // ジェスチャの所有権（v1.8.1）：(1) ドロワーのドラッグ追随は p4 の swipeBlocked が .gtab-view 内の
+  // タッチを最初から受け付けない。(2) ブラウザの横パンは CSS の touch-action: pan-y で抑え、さらに
+  // 横スワイプと確定した時点で touchmove を preventDefault してネイティブのパンに渡さない。
+  // (3) スワイプ直後の click（セル選択など）は飲み込んで誤作動を防ぐ
   const gSwipe = { on: false, x: 0, y: 0, until: 0 };
   document.addEventListener('touchstart', (e) => {
     gSwipe.on = false;
@@ -1923,6 +2009,12 @@
     if (!e.target.closest('.gtab-view') || e.target.closest('input, textarea, select')) return;
     gSwipe.on = true; gSwipe.x = e.touches[0].clientX; gSwipe.y = e.touches[0].clientY;
   }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (!gSwipe.on) return;
+    const p = e.touches && e.touches[0]; if (!p) return;
+    const dx = p.clientX - gSwipe.x, dy = p.clientY - gSwipe.y;
+    if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.5) e.preventDefault(); // 横スワイプ確定：ブラウザの横パン・ラバーバンドに渡さない
+  }, { passive: false });
   document.addEventListener('touchend', (e) => {
     if (!gSwipe.on) return;
     gSwipe.on = false;
@@ -2009,22 +2101,6 @@
       await pullCalendar().catch(() => {});
       rerender();
     } catch (e) { toast('⚠️ ' + (e.message || e)); }
-  }
-  function homeCountdownCard() {
-    const { up } = sortedCountdowns();
-    if (!up.length) return '';
-    return `<section class="card cd-home"><div class="card-head"><h2>⏳ カウントダウン</h2><a class="link small" href="#countdown">すべて見る</a></div>
-      <ul class="cd-mini">${up.slice(0, 3).map((c) => { const n = cdDays(c); return `<li><a href="#countdown" class="cd-mini-row"><span class="cd-emoji sm" aria-hidden="true">${esc(c.emoji || '⏳')}</span><span class="grow"><b>${esc(trunc(c.title, 22))}</b><span class="muted small"> ${fmtShort(c.date)}</span></span><span class="cd-mini-n ${n === 0 ? 'today' : ''}">${n === 0 ? '今日！' : `あと<b>${n}</b>日`}</span></a></li>`; }).join('')}</ul></section>`;
-  }
-  // ホーム：これからの予定（7日間・Googleカレンダー）
-  function homeScheduleCard() {
-    const t = todayStr(); const end = addDays(t, 7);
-    const evs = calEvents().filter((e) => e.date >= t && e.date <= end);
-    if (!cal.calendar) return '';
-    const rows = evs.slice(0, 6).map((e) => { const n = daysUntil(e.date); return `<li class="sched-row"><span class="sched-d ${n === 0 ? 'today' : ''}">${n === 0 ? '今日' : n === 1 ? '明日' : fmtShort(e.date)}<small>${'日月火水木金土'[new Date(e.date + 'T00:00').getDay()]}</small></span><span class="grow"><b>${esc(trunc(stripHourglass(e.title), 26))}</b><span class="muted small">${evTime(e) ? ' ' + evTime(e) : ' 終日'}${e.location ? '・' + esc(trunc(e.location, 14)) : ''}</span></span></li>`; }).join('');
-    return `<section class="card sched-home"><div class="card-head"><h2>📅 これからの予定</h2><a class="link small" href="#countdown">カウントダウン</a></div>
-      ${rows ? `<ul class="sched-list">${rows}</ul>${evs.length > 6 ? `<p class="muted small">ほか ${evs.length - 6}件</p>` : ''}` : '<p class="muted small">この7日間の予定はありません</p>'}
-      <p class="muted small cal-sync">Googleカレンダー最終取得: ${esc(fmtStamp(cal.calendar.updatedAt || cal.fetchedAt))}</p></section>`;
   }
   function addMonthsStr(base, m) { const [y, mo, d] = base.split('-').map(Number); const dt = new Date(y, mo - 1 + m, 1); const last = new Date(dt.getFullYear(), dt.getMonth() + 1, 0).getDate(); dt.setDate(Math.min(d, last)); return todayStr(dt); }
   function cdPreviewText(v) { return isDateStr(v) ? `${fmtDate(v)} ・ ${cdText(daysUntil(v))}` : '日付を選んでください'; }

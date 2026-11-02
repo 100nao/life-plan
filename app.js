@@ -4,11 +4,12 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.8.0';
+  const APP_VERSION = '1.8.2';
   // カテゴリは「プライベート」「仕事」の2択に固定（v1.8.0）。読み込み時に normCategory で寄せる
   const CATEGORIES = ['プライベート', '仕事'];
   const DEFAULT_CATEGORIES = CATEGORIES;
   const normCategory = (v) => (v === '仕事' || v === '仕事/キャリア' ? '仕事' : 'プライベート');
+  const ESTIMATES = [15, 30, 60, 180, 240, 480]; // 目安時間（分）。240=半日・480=1日として扱う（v1.8.2）
   const IMPORTANCE = { high: '高', mid: '中', low: '低' };
   const IMPORTANCE_ORDER = { high: 0, mid: 1, low: 2 };
   const TIMEFRAME = { thisYear: '今年', y1_3: '1〜3年', y5: '5年以内', someday: 'いつか' };
@@ -119,6 +120,7 @@
       importance: IMPORTANCE[i.importance] ? i.importance : 'mid',
       timeframe: TIMEFRAME[i.timeframe] ? i.timeframe : '',
       targetDate: isDateStr(i.targetDate) ? i.targetDate : '',
+      estimate: ESTIMATES.includes(Number(i.estimate)) ? Number(i.estimate) : 0,
       status: STATUS[i.status] ? i.status : 'todo',
       quadrant: QUADRANTS[i.quadrant] ? i.quadrant : '',
       steps: (Array.isArray(i.steps) ? i.steps : Array.isArray(i.subtasks) ? i.subtasks : []).map(normStep).filter((s) => s.text),
@@ -339,12 +341,14 @@
   function sectionHead(title, sub = '', right = '') {
     return `<div class="view-head"><div><h1>${VIEW_ICON[title] ? `<span class="h-ico" aria-hidden="true">${VIEW_ICON[title]}</span>` : ''}${esc(title)}</h1>${sub ? `<p class="sub">${sub}</p>` : ''}</div>${right}</div>`;
   }
+  const estLabel = (m) => (m === 240 ? '半日' : m === 480 ? '1日' : m % 60 === 0 ? `${m / 60}時間` : `${m}分`); // v1.8.2：目安時間の表示
   function itemChips(i, o = {}) {
     const c = [];
     if (o.showList) c.push(chip(LISTS[i.list], 'list'));
     if (i.source === 'ai') c.push(chip('🤖 AI提案から', 'ai-chip'));
     if (i.quadrant && !o.hideQuadrant) c.push(chip(QUADRANTS[i.quadrant].label, 'qchip ' + i.quadrant));
     if (i.category) c.push(chip(i.category, 'cat'));
+    if (i.estimate) c.push(chip('⏱ ' + estLabel(i.estimate), 'est'));
     if (i.list !== 'inbox' || i.importance !== 'mid') c.push(chip('重要度 ' + IMPORTANCE[i.importance], 'imp-' + i.importance));
     if (i.timeframe) c.push(chip(TIMEFRAME[i.timeframe], 'tf'));
     if (i.targetDate && i.status !== 'done') {
@@ -378,7 +382,7 @@
           ${ctx === 'matrix' ? actions : ''}<h3 class="item-title">${esc(i.title)}</h3>
           ${i.notes && ctx !== 'matrix' ? `<p class="item-notes">${esc(trunc(i.notes, 90))}</p>` : ''}
           ${itemChips(i, { showList, hideQuadrant: ctx === 'matrix' })}
-          ${total ? `<div class="mini-steps">${progressBar(done, total, 'thin')}<span>ステップ ${done}/${total}</span></div>` : ''}
+          ${total ? `<div class="mini-steps">${progressBar(done, total, 'thin')}<span>ステップ ${done}/${total}（${Math.round((done / total) * 100)}%）</span></div>` : ''}
         </div>
       </div>
       ${ctx !== 'matrix' && actions ? `<div class="item-actions">${actions}</div>` : ''}
@@ -397,173 +401,11 @@
     </article>`;
   }
 
-  // ───────────────────────── 画面: ホーム ─────────────────────────
-  function viewHome() {
-    const items = state.items;
-    const wish = items.filter((i) => i.list === 'wish');
-    const wishDone = wish.filter((i) => i.status === 'done').length;
-    const tasks = activeItems().filter((i) => i.list === 'task');
-    const later = activeItems().filter((i) => i.list === 'later');
-    const inbox = activeItems().filter((i) => i.list === 'inbox');
-    const activeLessons = state.lessons.filter((l) => l.status === 'active');
-    const isEmpty = !items.length && !state.lessons.length && !state.journal.length;
-    const out = [];
-    const d = new Date();
-    const hr = d.getHours();
-    const greet = hr < 5 ? 'こんばんは' : hr < 11 ? 'おはようございます' : hr < 18 ? 'こんにちは' : 'こんばんは';
-    const nStuck = activeItems().filter(isStuck).length;
-    out.push(`<section class="hero" aria-label="ホーム">
-      <div class="hero-in">
-        <img class="avatar hero-avatar" src="images/avatar-256.png" alt="" width="72" height="72">
-        <div class="grow"><p class="hero-date">${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日（${'日月火水木金土'[d.getDay()]}）</p>
-          <h1 class="hero-title">${greet}</h1>
-          <p class="hero-sub">${isEmpty ? 'やりたい事を、一歩ずつ。' : `未完了のタスク ${tasks.length}件${nStuck ? `・停滞 ${nStuck}件` : ''}・やりたい事 ${wish.length - wishDone}件`}</p></div>
-      </div>
-      <div class="hero-links"><a class="hero-pill" href="#ai">🤖 AIに相談</a><a class="hero-pill" href="#habits">🐣 スタンプ</a><a class="hero-pill" href="#matrix">🧭 マトリクス</a><a class="hero-pill" href="#journal">📔 今日を書く</a></div>
-    </section>`);
-
-    // コーチからの新着アドバイス（いちばん目立つ場所に）
-    const unread = sortedCoach().filter((c) => !c.read);
-    if (unread.length) {
-      out.push(`<section class="card coach-new">
-        <div class="card-head"><h2>💬 コーチからの新着アドバイス <span class="count new">${unread.length}</span></h2>${unread.length > 1 ? '<button class="btn small soft" data-action="markAllRead">すべて既読</button>' : ''}</div>
-        ${unread.slice(0, 3).map((c) => adviceCard(c, true)).join('')}
-        ${unread.length > 3 ? `<a class="link" href="#coach">ほか ${unread.length - 3} 件を見る</a>` : ''}
-      </section>`);
-    }
-
-    // ✨ 今日の分析（Gemini）
-    out.push(homeCountdownCard());
-    out.push(homeScheduleCard());
-    out.push(homeAnalysisCard());
-
-    if (isEmpty) {
-      out.push(`<section class="card welcome">
-        <h2>ようこそ 🌿</h2>
-        <p>やりたい事、後回しでいい事、習い事、日々のタスクをひとつにまとめる自分専用のノートです。データはこの端末のブラウザの中（と、設定すればあなたの GitHub リポジトリ）だけに保存されます。</p>
-        <p class="muted">まずは右下の「＋」から思いついたことを書いてみましょう。使い方を見たいときはサンプルを追加できます（あとから削除できます）。</p>
-        <div class="btn-row">
-          <button class="btn primary" data-action="quickAdd">＋ 追加する</button>
-          <button class="btn soft" data-action="addSamples">サンプルを追加</button>
-          <button class="btn soft" data-action="addMemoSamples">サンプルを追加（手書きメモから）</button>
-        </div>
-      </section>`);
-    }
-    if (!sync.connected) {
-      out.push(`<a class="card hint-card" href="#settings/sync"><b>🔗 AIコーチと自動でつなぐ</b><span class="muted small">設定でトークンを1回貼るだけ。以後は自動で保存・読み込みされ、コーチのアドバイスもここに届きます。</span></a>`);
-    }
-
-    // 習慣スタンプ（今日のスタンプとぽむ）
-    if (state.habits.length || !isEmpty) { checkPomuChanges(); out.push(homeHabitsCard()); }
-
-    // 今年のフォーカス
-    const focus = state.focus[thisYear()] || '';
-    out.push(`<section class="card focus" data-action="editFocus" role="button" tabindex="0">
-      <div class="label">${thisYear()}年のフォーカス</div>
-      ${focus ? `<p class="focus-text">${esc(focus)}</p>` : '<p class="muted">タップして今年いちばん大事にしたいことを書く</p>'}
-    </section>`);
-
-    // AIに相談（Gemini）
-    out.push(`<a class="card ai-entry" href="#ai"><span class="ai-emoji" aria-hidden="true">🤖</span><span class="grow"><b>AIに相談（Gemini）</b><span class="muted small">今週何から？ 停滞の原因は？ その場でコーチに聞けます</span></span><span class="chev" aria-hidden="true">›</span></a>`);
-
-    // 数字
-    out.push(`<section class="stats">
-      <a class="stat" href="#matrix"><span class="n">${tasks.length}</span><span class="l">タスク</span></a>
-      <a class="stat" href="#wish"><span class="n">${wish.length - wishDone}<small>/${wish.length}</small></span><span class="l">やりたい事</span></a>
-      <a class="stat" href="#later"><span class="n">${later.length}</span><span class="l">後回し</span></a>
-      <a class="stat" href="#inbox"><span class="n">${inbox.length}</span><span class="l">未整理</span></a>
-      <a class="stat" href="#lessons"><span class="n">${activeLessons.length}</span><span class="l">習い事 ${fmtYen(activeLessonCost())}/月</span></a>
-    </section>`);
-
-    // マトリックスの概要
-    const act = activeItems();
-    if (act.some((i) => i.quadrant)) {
-      out.push(`<section class="card">
-        <div class="card-head"><h2>マトリックス</h2><a class="link" href="#matrix">開く</a></div>
-        <div class="mini-matrix">${QUADRANT_LAYOUT.map((q) => {
-          const list = act.filter((i) => i.quadrant === q);
-          return `<a href="#matrix" class="mm ${q}"><b>${list.length}</b><span>${QUADRANTS[q].label}</span><em>${list.slice(0, 2).map((i) => esc(trunc(i.title, 12))).join('・')}</em></a>`;
-        }).join('')}</div>
-      </section>`);
-    }
-
-    // 停滞
-    const stuck = act.filter(isStuck).sort((a, b) => idleDays(b) - idleDays(a));
-    if (stuck.length) {
-      out.push(`<section class="card">
-        <div class="card-head"><h2>ずっとできていない事 <span class="count stuck">${stuck.length}</span></h2></div>
-        <p class="muted small">${STUCK_DAYS}日以上進んでいない項目です。理由を書くと次の一歩が見つけやすくなります。</p>
-        <ul class="plain-list">${stuck.slice(0, 6).map((i) => `<li class="stuck-row">
-          <div class="grow" data-action="openItem" data-id="${i.id}" role="button" tabindex="0"><b>${esc(i.title)}</b>
-            <div class="muted small">${idleDays(i)}日進捗なし・作成から${daysSince(i.createdAt)}日${i.stuck.tags.length ? '・理由: ' + esc(i.stuck.tags.join('、')) : ''}</div></div>
-          <button class="btn small soft" data-action="stuckReason" data-id="${i.id}">${i.stuck.tags.length || i.stuck.text ? '理由を編集' : '理由を記録'}</button>
-        </li>`).join('')}</ul>
-        ${stuck.length > 6 ? `<p class="muted small">ほか ${stuck.length - 6} 件</p>` : ''}
-      </section>`);
-    }
-
-    // 期限が近い
-    const soon = act.filter((i) => i.targetDate && daysUntil(i.targetDate) <= 30).sort((a, b) => a.targetDate.localeCompare(b.targetDate));
-    const soonSteps = [];
-    act.forEach((i) => i.steps.forEach((s) => { if (!s.done && s.due && daysUntil(s.due) <= 14) soonSteps.push({ i, s }); }));
-    if (soon.length || soonSteps.length) {
-      out.push(`<section class="card">
-        <div class="card-head"><h2>期限が近いもの</h2></div>
-        <ul class="plain-list">
-          ${soon.slice(0, 6).map((i) => `<li data-action="openItem" data-id="${i.id}" role="button" tabindex="0"><span class="grow">${esc(i.title)}</span><span class="chip due ${daysUntil(i.targetDate) < 0 ? 'over' : 'soon'}">${fmtShort(i.targetDate)}・${dueText(i.targetDate)}</span></li>`).join('')}
-          ${soonSteps.slice(0, 6).map(({ i, s }) => `<li data-action="openItem" data-id="${i.id}" role="button" tabindex="0"><span class="grow">${esc(s.text)}<span class="muted small">（${esc(trunc(i.title, 16))}）</span></span><span class="chip due ${daysUntil(s.due) < 0 ? 'over' : 'soon'}">${fmtShort(s.due)}・${dueText(s.due)}</span></li>`).join('')}
-        </ul>
-      </section>`);
-    }
-
-    // ランダムピック
-    const pool = wish.filter((i) => i.status !== 'done');
-    if (pool.length) {
-      let pick = pool.find((i) => i.id === ui.randomId);
-      if (!pick) { pick = pool[Math.floor(Math.random() * pool.length)]; ui.randomId = pick.id; }
-      out.push(`<section class="card pick">
-        <div class="card-head"><h2>今日のやりたい事ピック 🎲</h2><button class="btn small soft" data-action="reroll">別のを引く</button></div>
-        <div class="pick-body" data-action="openItem" data-id="${pick.id}" role="button" tabindex="0"><h3>${esc(pick.title)}</h3>${itemChips(pick)}</div>
-      </section>`);
-    }
-
-    // カテゴリ別
-    const cats = {};
-    wish.forEach((i) => { const c = i.category || '未分類'; cats[c] = cats[c] || { t: 0, d: 0 }; cats[c].t++; if (i.status === 'done') cats[c].d++; });
-    const catKeys = Object.keys(cats);
-    if (catKeys.length) {
-      out.push(`<section class="card">
-        <div class="card-head"><h2>カテゴリ別（やりたい事）</h2><span class="muted small">全体 ${wishDone}/${wish.length} 完了</span></div>
-        ${progressBar(wishDone, wish.length)}
-        <ul class="cat-list">${catKeys.map((c) => `<li><span class="cat-name">${esc(c)}</span>${progressBar(cats[c].d, cats[c].t, 'thin')}<span class="muted small">${cats[c].d}/${cats[c].t}</span></li>`).join('')}</ul>
-      </section>`);
-    }
-
-    // 既読のコーチアドバイス（最新1件）
-    const lastRead = sortedCoach().find((c) => c.read);
-    if (lastRead) {
-      out.push(`<section class="card coach-note"><div class="card-head"><h2>前回のアドバイス</h2><a class="link" href="#coach">すべて見る</a></div>
-        <div class="muted small">${fmtDate(lastRead.date)}</div><p class="pre">${esc(trunc(lastRead.text, 160))}</p></section>`);
-    }
-
-    // 最近のジャーナル
-    const j = [...state.journal].sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt)).slice(0, 2);
-    if (j.length) {
-      out.push(`<section class="card">
-        <div class="card-head"><h2>最近のジャーナル</h2><a class="link" href="#journal">開く</a></div>
-        ${j.map((e) => `<div class="journal-mini" data-action="editJournal" data-id="${e.id}" role="button" tabindex="0"><span class="mood">${MOODS[e.mood] || '📝'}</span><div><div class="muted small">${fmtDate(e.date)}</div><p>${esc(trunc(e.text, 80))}</p></div></div>`).join('')}
-      </section>`);
-    }
-
-    if (!isEmpty) out.push(`<div class="btn-row center muted-links"><a class="link" href="#ai">🤖 AIに相談（Gemini）</a><a class="link" href="#coach">🧭 コーチに相談する</a><a class="link" href="#done">✓ 完了履歴</a></div>`);
-    return out.join('');
-  }
-
   // ───────────────────────── 画面: マトリックス ─────────────────────────
   function viewMatrix() {
-    const f = ui.matrixFilter;
-    const pool = activeItems().filter((i) => (f === 'all' ? true : i.list === f));
-    const filters = [['all', 'すべて'], ['task', 'タスク'], ['wish', 'やりたい事'], ['later', '後回し'], ['inbox', '未整理']];
+    const f = ui.matrixFilter; // v1.8.1：種別（タスク/やりたい事/…）ではなくカテゴリ（仕事/プライベート）で切り替える
+    const pool = activeItems().filter((i) => (f === 'all' ? true : i.category === f));
+    const filters = [['all', 'すべて'], ['仕事', '仕事'], ['プライベート', 'プライベート']];
     const unclassified = pool.filter((i) => !i.quadrant);
     const out = [];
     out.push(`<div class="seg-scroll">${filters.map(([k, l]) => `<button class="pill ${f === k ? 'on' : ''}" data-action="matrixFilter" data-v="${k}">${l}</button>`).join('')}</div>`);
@@ -803,7 +645,7 @@
   // ───────────────────────── 画面: 項目の詳細（ステップ） ─────────────────────────
   function viewItem(id) {
     const i = getItem(id);
-    if (!i) return sectionHead('見つかりません') + '<p class="muted">この項目は削除されたようです。</p><a class="btn soft" href="#home">ホームへ</a>';
+    if (!i) return sectionHead('見つかりません') + '<p class="muted">この項目は削除されたようです。</p><a class="btn soft" href="#habits">週間スタンプへ</a>';
     const total = i.steps.length; const done = stepsDone(i);
     const nextIdx = i.steps.findIndex((s) => !s.done);
     const stuck = isStuck(i);
@@ -819,6 +661,11 @@
         <div><span class="muted small">作成</span><b>${isoToDate(i.createdAt).replace(/-/g, '/')}</b><span class="muted small">${daysSince(i.createdAt)}日前</span></div>
         <div><span class="muted small">最後の進捗</span><b>${i.lastProgressAt ? isoToDate(i.lastProgressAt).replace(/-/g, '/') : 'まだなし'}</b><span class="muted small">${idleDays(i)}日経過</span></div>
         <div><span class="muted small">状態</span><b>${STATUS[i.status]}</b><span class="muted small">${stuck ? '⚠️ 停滞中' : i.status === 'done' ? '🎉' : '順調'}</span></div>
+      </div>
+      <div class="detail-actions">
+        <button class="btn soft small" data-action="focusStepAdd" data-id="${i.id}">＋ ステップ追加</button>
+        <button class="btn soft small" data-action="editItem" data-id="${i.id}">${ICON.edit} 編集</button>
+        <button class="btn soft small" data-action="toggleDone" data-id="${i.id}">${i.status === 'done' ? '↩ 未完了に戻す' : '✓ 完了にする'}</button>
       </div>
     </section>`);
 
@@ -1135,16 +982,6 @@
       <button class="stamp-btn ${i.doneToday ? 'on' : i.missedToday ? 'is-x' : ''}" data-action="habitToggle" data-id="${h.id}" aria-pressed="${i.doneToday}" aria-label="${esc(h.name)}：${i.doneToday ? '今日のスタンプを取り消す' : '今日のスタンプを押す'}">${i.missedToday ? STAMP_XM : STAMP_O}<span>${i.doneToday ? '済' : i.missedToday ? '' : '押す'}</span></button>
     </div>`;
   }
-  function homeHabitsCard() {
-    if (!state.habits.length) {
-      return `<a class="card habit-invite" href="#habits"><img src="${pomuImg('stage-1', true)}" alt="" width="256" height="256" loading="lazy"><span class="grow"><b>毎日の目標スタンプ</b><span class="muted small">毎日つづけるほど、ぽむが育ちます。タップして始める</span></span></a>`;
-    }
-    const n = state.habits.filter((h) => habitStats(h).doneToday).length;
-    return `<section class="card habits-home">
-      <div class="card-head"><h2>🐣 今日のスタンプ <span class="count ${n === state.habits.length ? 'all' : ''}">${n}/${state.habits.length}</span></h2><a class="link" href="#habits">すべて見る</a></div>
-      <div class="habit-list">${state.habits.map(habitRow).join('')}</div>
-    </section>`;
-  }
   function viewHabits(arg) {
     checkPomuChanges();
     if (arg === 'zukan') return viewZukan();
@@ -1422,13 +1259,14 @@
 
   // ───────────────────────── ルーティングと描画 ─────────────────────────
   const main = $('#main');
-  const VIEWS = { home: viewHome, matrix: viewMatrix, wish: viewWish, later: viewLater, lessons: viewLessons, inbox: viewInbox, journal: viewJournal, done: viewDone, search: viewSearch, settings: viewSettings, coach: viewCoach, item: viewItem, ai: viewAI, habits: viewHabits, aisuggest: viewAiSuggest, countdown: viewCountdown, calendar: viewCalendar };
-  const TITLES = { home: 'ホーム', matrix: 'マトリックス', wish: 'TASK', later: '後回しでいい事', lessons: '習い事', inbox: '未整理', journal: 'ジャーナル', done: '完了履歴', search: '検索', settings: '設定', coach: 'コーチに相談', item: '詳細', ai: 'AIに相談', habits: '習慣スタンプ', aisuggest: 'AI提案', countdown: 'カウントダウン', calendar: 'カレンダー' };
+  const VIEWS = { matrix: viewMatrix, wish: viewWish, later: viewLater, lessons: viewLessons, inbox: viewInbox, journal: viewJournal, done: viewDone, search: viewSearch, settings: viewSettings, coach: viewCoach, item: viewItem, ai: viewAI, habits: viewHabits, aisuggest: viewAiSuggest, countdown: viewCountdown, calendar: viewCalendar };
+  const TITLES = { matrix: 'マトリックス', wish: 'TASK', later: '後回しでいい事', lessons: '習い事', inbox: '未整理', journal: 'ジャーナル', done: '完了履歴', search: '検索', settings: '設定', coach: 'コーチに相談', item: '詳細', ai: 'AIに相談', habits: '習慣スタンプ', aisuggest: 'AI提案', countdown: 'カウントダウン', calendar: 'カレンダー' };
   function route() {
     const h = decodeURIComponent(location.hash.replace(/^#\/?/, ''));
     const idx = h.indexOf('/');
     const name = idx >= 0 ? h.slice(0, idx) : h;
-    return { name: VIEWS[name] ? name : 'home', arg: idx >= 0 ? h.slice(idx + 1) : '' };
+    // v1.8.1：ホーム廃止。既定ルートは週間スタンプ（habits）。#home や不明な名前も habits に寄せる
+    return { name: VIEWS[name] ? name : 'habits', arg: idx >= 0 ? h.slice(idx + 1) : '' };
   }
   let pendingRender = false;
   function render(keepScroll) {
@@ -1453,6 +1291,7 @@
     if (changed && !keepScroll) { main.classList.remove('view-enter'); void main.offsetWidth; main.classList.add('view-enter'); }
     moveTabIndicator(changed);
     if (r.name === 'ai' && !keepScroll) aiScrollBottom();
+    if (r.name === 'calendar') positionTgScroll(); // v1.8.1：週・日タイムグリッドの初期スクロール位置（p5）
     document.body.classList.toggle('route-ai', r.name === 'ai');
     document.body.classList.toggle('route-matrix', r.name === 'matrix'); // v1.8.0：マトリクスは見出しなし・ほぼ全画面
     if (r.name === 'search' && !keepScroll) setTimeout(() => { const s = $('#searchInput'); if (s) s.focus(); }, 50);
@@ -1672,7 +1511,7 @@
         <input name="title" class="big-input" placeholder="何をしたい？" required autocomplete="off" autofocus enterkeyhint="done" aria-label="タイトル">
         <div class="field"><span class="field-label">追加先</span><div class="seg wrap">${dests.map(([k, l]) => `<label class="pill-radio"><input type="radio" name="dest" value="${k}" ${def === k ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div></div>
         <div class="field qa-quad"><span class="field-label">緊急度 × 重要度</span>${quadSelect('quadrant', preset.quadrant || '')}</div>
-        <div class="field qa-cat"><span class="field-label">カテゴリ</span><select name="category">${catOptions('', null)}</select></div>
+        <div class="field qa-cat"><span class="field-label">カテゴリ</span><select name="category">${catOptions('プライベート', null)}</select></div>
         <div class="btn-row end"><button type="button" class="btn ghost" data-action="quickAddDetail">詳しく入力</button><button class="btn primary" type="submit">追加</button></div>
       </form>`, { onOpen: (box) => {
       const upd = () => { const d = $('input[name=dest]:checked', box).value; $('.qa-quad', box).hidden = d === 'lesson'; $('.qa-cat', box).hidden = d === 'lesson' || d === 'inbox'; };
@@ -1712,6 +1551,7 @@
           <label class="field"><span class="field-label">目標日（任意）</span><input type="date" name="targetDate" value="${esc(i.targetDate)}"></label>
         </div>
         <div class="field"><span class="field-label">緊急度 × 重要度</span>${quadSelect('quadrant', i.quadrant)}</div>
+        <div class="field"><span class="field-label">目安時間</span><div class="seg wrap"><label class="pill-radio"><input type="radio" name="estimate" value="" ${!i.estimate ? 'checked' : ''}><span>なし</span></label>${ESTIMATES.map((m) => `<label class="pill-radio"><input type="radio" name="estimate" value="${m}" ${i.estimate === m ? 'checked' : ''}><span>${estLabel(m)}</span></label>`).join('')}</div></div>
         <label class="field"><span class="field-label">タグ（カンマ区切り）</span><input name="tags" value="${esc(i.tags.join(', '))}" autocomplete="off"></label>
         <div class="btn-row between"><button type="button" class="btn ghost danger" data-action="deleteItem" data-id="${i.id}">削除</button>
           <span class="btn-row"><button type="button" class="btn ghost" data-action="closeModal">キャンセル</button><button class="btn primary" type="submit">保存</button></span></div>
@@ -1728,7 +1568,7 @@
     const prevList = i.list;
     Object.assign(i, {
       title, notes: String(fd.get('notes') || ''), list: fd.get('list'), category: normCategory(fd.get('category') || ''), importance: fd.get('importance'),
-      timeframe: fd.get('timeframe') || '', targetDate: fd.get('targetDate') || '', quadrant: fd.get('quadrant') || '',
+      timeframe: fd.get('timeframe') || '', targetDate: fd.get('targetDate') || '', quadrant: fd.get('quadrant') || '', estimate: Number(fd.get('estimate') || 0),
       tags: String(fd.get('tags') || '').split(/[,、]/).map((s) => s.trim()).filter(Boolean),
     });
     touch(i, prevList !== i.list);
@@ -3219,23 +3059,6 @@
     return `<p class="ana-summary">${esc(a.summary)}</p>${a.insights.length ? `<ul class="ana-insights">${a.insights.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}`;
   }
   // ホームの「✨ 今日の分析」
-  function homeAnalysisCard() {
-    if (!ai.key && !state.aiAnalyses.length && !openSuggestions().length) return '';
-    const a = latestAnalysis(); const open = openSuggestions(); const t = todayStr();
-    const left = manualLeft();
-    const head = `<div class="card-head"><h2>✨ 今日の分析${a && a.date !== t ? `<span class="muted small"> ${fmtShort(a.date)}</span>` : ''}</h2>
-      <button class="icon-btn small" data-action="anaCollapse" aria-expanded="${!aiDaily.collapsed}" aria-label="${aiDaily.collapsed ? '開く' : 'たたむ'}">${aiDaily.collapsed ? '▾' : '▴'}</button></div>`;
-    const link = `<a class="btn soft small ana-link" href="#aisuggest">🤖 AI提案を見る（${open.length}件）</a>`;
-    if (aiDaily.collapsed) return `<section class="card ana-card collapsed" id="anaCard">${head}<div class="btn-row">${link}</div></section>`;
-    let body = '';
-    if (anaUi.busy) body = '<p class="ana-busy"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span> Gemini が分析しています…</p>';
-    else if (a) body = analysisBody(a) + (open.length ? `<ul class="ana-preview">${open.slice(0, 2).map((s) => `<li><span class="qdot ${s.quadrant}" aria-hidden="true"></span>${esc(s.title)}</li>`).join('')}${open.length > 2 ? `<li class="muted small">ほか ${open.length - 2}件</li>` : ''}</ul>` : '');
-    else body = `<p class="muted small">${ai.key ? (aiDailyOn() ? '今日の分析はまだです。' : '毎日の自動分析はオフです。') : 'Gemini の APIキーを設定すると、毎日の分析が届きます。'}</p>`;
-    if (anaUi.error) body += `<p class="error-text small">⚠️ ${esc(anaUi.error)}</p>`;
-    return `<section class="card ana-card" id="anaCard">${head}${body}
-      <div class="btn-row">${link}${ai.key ? `<button class="btn ghost small" data-action="anaRerun" ${anaUi.busy || left <= 0 ? 'disabled' : ''}>🔁 もう一度分析<span class="muted small">（あと${Math.max(0, left)}回）</span></button>` : ''}</div>
-    </section>`;
-  }
   // 画面：🤖 AI提案
   function viewAiSuggest() {
     const open = openSuggestions().sort((a, b) => b.date.localeCompare(a.date) || (a.createdAt || '').localeCompare(b.createdAt || ''));
@@ -3581,21 +3404,48 @@
     return `<b class="cd-num past">${(-n).toLocaleString('ja-JP')}</b><span class="cd-unit">日経過</span>`;
   }
   const cdText = (n) => (n === 0 ? '今日！' : n > 0 ? `あと${n}日` : `${-n}日経過`);
-  function cdProgress(c) {
-    const start = isoToDate(c.createdAt) || todayStr();
-    const total = -daysUntil(start) + cdDays(c); // 作成日 → 目標日
-    const done = -daysUntil(start);
-    const pct = total <= 0 ? 100 : Math.max(0, Math.min(100, Math.round((done / total) * 100)));
-    return { pct, start };
+  // ── ドットグリッド（v1.8.1）：作成日→対象日を 1マス＝1日で並べる。経過（作成日〜今日）＝グレー、
+  // 残り（明日〜前日）＝水色、対象日＝オレンジ。総日数が 210 を超えたら 1マス＝1週間に切り替える。
+  // 作成日が無い/対象日より後などの不整合時は「残りのみ」等に倒して壊れないようにする。
+  function cdGridModel(c) {
+    const target = c.date;
+    if (!isDateStr(target)) return null;
+    const today = todayStr();
+    const created = isoToDate(c.createdAt);
+    let start = isDateStr(created) ? created : '';
+    if (!start || start > target) start = today < target ? addDays(today, 1) : target; // 欠落・不整合時：残りのみ（対象が過ぎていれば当日マスのみ）
+    if (start > target) start = target;
+    const span = daysUntil(target) - daysUntil(start); // 開始日→対象日の日数（0以上）
+    const weekly = span + 1 > 210;
+    const cells = [];
+    if (!weekly) {
+      for (let i = 0; i <= span; i++) {
+        const d = addDays(start, i);
+        cells.push(d === target ? 'goal' : d <= today ? 'done' : 'left');
+      }
+    } else {
+      const weeks = Math.ceil((span + 1) / 7);
+      for (let w = 0; w < weeks; w++) {
+        if (w === weeks - 1) { cells.push('goal'); continue; } // 最終マス（対象日を含む週）はオレンジ
+        cells.push(addDays(start, w * 7 + 6) <= today ? 'done' : 'left'); // まるごと経過した週だけグレー
+      }
+    }
+    return { cells, weekly };
+  }
+  function cdGridHtml(c) {
+    const m = cdGridModel(c);
+    if (!m) return '';
+    const done = m.cells.filter((x) => x === 'done').length;
+    const left = m.cells.filter((x) => x === 'left').length;
+    return `<div class="cd-grid ${m.weekly ? 'weekly' : ''}" role="img" aria-label="作成日から対象日まで${m.weekly ? `（1マス＝1週間・全${m.cells.length}マス）` : `（全${m.cells.length}日）`}：経過 ${done}・残り ${left}・対象日 1">${m.cells.map((k) => `<span class="cd-dot ${k}"></span>`).join('')}</div>`;
   }
   function countdownCard(c) {
-    const n = cdDays(c); const pr = cdProgress(c); const t = c.taskId ? getItem(c.taskId) : null; const gs = c.readOnly ? null : cdGcalStatus(c);
+    const n = cdDays(c); const t = c.taskId ? getItem(c.taskId) : null; const gs = c.readOnly ? null : cdGcalStatus(c);
     return `<article class="card cd-card ${n === 0 ? 'is-today' : n < 0 ? 'is-past' : ''} ${c.readOnly ? 'is-google' : ''}" data-cd="${c.id}">
       <div class="cd-top"><span class="cd-emoji" aria-hidden="true">${esc(c.emoji || '⏳')}</span>
         <div class="cd-main"><h3 class="cd-title">${esc(c.title)}${c.readOnly ? ' <span class="chip g-badge">Google</span>' : ''}</h3><p class="cd-date">${fmtDate(c.date)}</p></div>
         <div class="cd-count" aria-label="${cdText(n)}">${cdLabel(n)}</div></div>
-      ${n >= 0 && !c.readOnly ? `<div class="cd-bar" role="progressbar" aria-valuenow="${pr.pct}" aria-valuemin="0" aria-valuemax="100" aria-label="作成日からの進み具合"><span style="width:${pr.pct}%"></span></div>
-      <div class="cd-bar-meta muted small"><span>${fmtShort(pr.start)} から</span><span>${pr.pct}%</span></div>` : ''}
+      ${cdGridHtml(c)}
       ${c.memo ? `<p class="cd-memo">${esc(c.memo)}</p>` : ''}
       ${t ? `<a class="cd-link small" href="#item/${t.id}">🔗 ${esc(trunc(t.title, 30))}</a>` : ''}
       ${gs ? `<p class="cd-gcal ${gs.cls} small">${gs.text}</p>` : ''}
@@ -3625,7 +3475,7 @@
   // 全カレンダーの予定を見て、その場で追加・編集・削除する（Google Calendar API 直接）。
   // 予定データは cal.calendar.events（基本範囲：過去30日〜未来180日・全カレンダー分・calendarId と色つき）
   // ＋ cal.extraEvents（表示範囲が基本範囲の外に出たときに追加取得した分）。
-  const gtab = { month: '', day: '', view: 'month' }; // view: 'month' | 'week' | 'day'（既定は月）
+  const gtab = { month: '', day: '', view: 'month', lastTap: null, tgKey: '', tgPos: null }; // view: 'month' | 'week' | 'day'（既定は月）。lastTap はダブルタップ判定、tgKey/tgPos はタイムグリッドのスクロール位置管理
   function gtabInit() { const t = todayStr(); if (!gtab.day) gtab.day = t; if (!gtab.month) gtab.month = t.slice(0, 7); }
   const gtabEvents = () => calEvents();
   function mondayOf(ds) { const d = new Date(ds + 'T00:00:00'); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return todayStr(d); }
@@ -3645,6 +3495,85 @@
     if (!list.length) return '<p class="muted small">この日の予定はありません</p>';
     return `<ul class="plain-list">${list.map((e) => { const cm = gcalCalendarById(e.calendarId); const ro = !gcalWritableCal(cm); return `<li><button type="button" class="gtab-ev" data-action="gevOpen" data-cid="${esc(e.calendarId)}" data-eid="${esc(e.id)}"><span class="gtab-dot" style="background:${esc(e.color || (cm && cm.color) || '#4285f4')}"></span><span class="gtab-time">${esc(gevTimeLabel(e))}</span><span class="grow"><b>${esc(trunc(e.title, 40))}</b><span class="muted small"> ${esc(cm ? cm.summary : '')}${e.location ? '・' + esc(trunc(e.location, 20)) : ''}</span></span>${ro ? '<span class="chip">閲覧のみ</span>' : ''}</button></li>`; }).join('')}</ul>`;
   }
+  // ── 週・日表示のタイムグリッド（v1.8.1：Google カレンダーの週表示と同じ時間軸形式）──
+  // 週＝7列・日＝1列で描画を共用する。上に曜日・日付ヘッダー（今日は丸くハイライト）と終日の帯、
+  // 下に 0:00–24:00 の時間軸グリッド（縦スクロール）。予定は開始〜終了に応じた位置・長さのブロックで、
+  // 重なる場合は横並びに割り当てる。週の日見出しタップは従来通り gtabDayView でその日の日表示へ。
+  const TG_H = 48; // 1時間の高さ(px)
+  const tgMinOf = (iso) => { const d = new Date(iso); return isNaN(d) ? null : d.getHours() * 60 + d.getMinutes(); };
+  function tgBlocksHtml(day, evs) {
+    const timed = [];
+    evs.forEach((e) => {
+      if (e.allDay || !gevOnDay(e, day)) return;
+      const s = tgMinOf(e.start); if (s == null) return;
+      let en = e.end ? tgMinOf(e.end) : null;
+      if (en == null) en = s + 60;
+      if (e.end && String(e.end).slice(0, 10) > day) en = 1440; // 日をまたぐ予定はその日の終わりまで
+      if (en <= s) en = s + 30;
+      timed.push({ e, s, en: Math.min(en, 1440) });
+    });
+    timed.sort((a, b) => a.s - b.s || (b.en - b.s) - (a.en - a.s));
+    // 重なりの塊ごとに列を割り当てる（簡易レイアウト）
+    const placed = [];
+    let cluster = [], clusterEnd = -1;
+    const flush = () => {
+      if (!cluster.length) return;
+      const ends = [];
+      cluster.forEach((it) => { let ci = ends.findIndex((x) => x <= it.s); if (ci < 0) { ends.push(it.en); ci = ends.length - 1; } else ends[ci] = it.en; it.col = ci; });
+      cluster.forEach((it) => { it.cols = ends.length; placed.push(it); });
+      cluster = []; clusterEnd = -1;
+    };
+    timed.forEach((it) => { if (cluster.length && it.s >= clusterEnd) flush(); cluster.push(it); clusterEnd = Math.max(clusterEnd, it.en); });
+    flush();
+    return placed.map(({ e, s, en, col, cols }) => {
+      const cm = gcalCalendarById(e.calendarId);
+      const top = (s / 60) * TG_H, h = Math.max(16, ((en - s) / 60) * TG_H - 2);
+      return `<button type="button" class="gtab-tgev" data-action="gevOpen" data-cid="${esc(e.calendarId)}" data-eid="${esc(e.id)}" style="top:${top}px;height:${h}px;left:${(col * 100) / cols}%;width:${100 / cols}%;background:${esc(e.color || (cm && cm.color) || '#4285f4')}" aria-label="${esc(e.title)} ${esc(gevTimeLabel(e))}"><b>${esc(e.title)}</b><span>${esc(gevTimeLabel(e))}</span></button>`;
+    }).join('');
+  }
+  function gtabTimeGridHtml(days, evs) {
+    const today = todayStr();
+    const n = days.length;
+    const heads = days.map((ds) => {
+      const wd = '月火水木金土日'[(new Date(ds + 'T00:00:00').getDay() + 6) % 7];
+      const inner = `<span class="gtab-tg-wd">${wd}</span><span class="gtab-tg-dn ${ds === today ? 'today' : ''}">${Number(ds.slice(8, 10))}</span>`;
+      return n > 1
+        ? `<button type="button" class="gtab-tg-head" data-action="gtabDayView" data-date="${ds}" aria-label="${ds}の日表示">${inner}</button>`
+        : `<div class="gtab-tg-head">${inner}</div>`;
+    }).join('');
+    const ads = days.map((ds) => {
+      const list = evs.filter((e) => e.allDay && gevOnDay(e, ds)).sort(gevSort);
+      return `<div class="gtab-tg-adcol">${list.map((e) => { const cm = gcalCalendarById(e.calendarId); return `<button type="button" class="gtab-tg-ad" data-action="gevOpen" data-cid="${esc(e.calendarId)}" data-eid="${esc(e.id)}" style="background:${esc(e.color || (cm && cm.color) || '#4285f4')}">${esc(trunc(e.title, n > 1 ? 10 : 30))}</button>`; }).join('')}</div>`;
+    }).join('');
+    const hours = Array.from({ length: 24 }, (_, h) => `<span class="gtab-tg-hour" style="top:${h * TG_H + 2}px">${h}:00</span>`).join('');
+    const now = new Date(); const nowTop = ((now.getHours() * 60 + now.getMinutes()) / 60) * TG_H;
+    const cols = days.map((ds) => `<div class="gtab-tg-col" data-action="gtabCol" data-date="${ds}">${ds === today ? `<span class="gtab-nowline" style="top:${nowTop}px"></span>` : ''}${tgBlocksHtml(ds, evs)}</div>`).join('');
+    return `<div class="gtab-tg ${n > 1 ? 'week' : 'day'}">
+      <div class="gtab-tg-headrow"><div class="gtab-tg-gut"></div><div class="gtab-tg-heads" style="grid-template-columns:repeat(${n},minmax(0,1fr))">${heads}</div></div>
+      <div class="gtab-tg-adrow"><div class="gtab-tg-gut"><span>終日</span></div><div class="gtab-tg-ads" style="grid-template-columns:repeat(${n},minmax(0,1fr))">${ads}</div></div>
+      <div class="gtab-tg-scroll"><div class="gtab-tg-body"><div class="gtab-tg-gutcol">${hours}</div><div class="gtab-tg-cols" style="grid-template-columns:repeat(${n},minmax(0,1fr))">${cols}</div></div></div>
+    </div>`;
+  }
+  // タイムグリッドの初期スクロール：表示期間が変わったときは 8時付近（今日を含む表示では現在時刻付近）へ。
+  // render()（p4）からカレンダー表示のたびに呼ばれる。再描画でスクロール要素が差し替わっても、
+  // 同じ期間なら直前のスクロール位置（下のリスナーが記録）を復元し、ユーザーのスクロールを邪魔しない
+  function positionTgScroll() {
+    const sc = document.querySelector('.gtab-tg-scroll');
+    if (!sc) return;
+    const key = gtab.view + '|' + (gtab.view === 'week' ? mondayOf(gtab.day) : gtab.day);
+    if (gtab.tgKey !== key) {
+      gtab.tgKey = key;
+      const today = todayStr();
+      const hasToday = gtab.view === 'week' ? (mondayOf(gtab.day) <= today && today <= addDays(mondayOf(gtab.day), 6)) : gtab.day === today;
+      let target = 8 * TG_H - 4;
+      if (hasToday) { const n = new Date(); target = ((n.getHours() * 60 + n.getMinutes()) / 60) * TG_H - 110; }
+      gtab.tgPos = Math.max(0, Math.min(target, Math.max(0, sc.scrollHeight - sc.clientHeight)));
+    }
+    if (gtab.tgPos != null) sc.scrollTop = gtab.tgPos;
+  }
+  document.addEventListener('scroll', (e) => {
+    if (e.target && e.target.classList && e.target.classList.contains('gtab-tg-scroll')) gtab.tgPos = e.target.scrollTop;
+  }, true);
   // 前へ／次へ／今日：表示単位（月・週・日）に連動する。スワイプ（下記）とボタンで共用
   function gtabMove(dir) {
     gtabInit();
@@ -3762,15 +3691,10 @@
       ${legend ? `<div class="gtab-legend">${legend}</div>` : ''}`;
     } else if (view === 'week') {
       const mon = mondayOf(gtab.day);
-      let blocks = '';
-      for (let i = 0; i < 7; i++) {
-        const ds = addDays(mon, i);
-        const cnt = evs.filter((e) => gevOnDay(e, ds)).length;
-        blocks += `<div class="gtab-wday ${ds === today ? 'today' : ''}"><button type="button" class="gtab-whead" data-action="gtabDayView" data-date="${ds}" aria-label="${ds}の日表示"><b>${Number(ds.slice(5, 7))}/${Number(ds.slice(8, 10))}（${'月火水木金土日'[i]}）</b><span class="muted small">${cnt}件</span></button>${gtabDayListHtml(ds, evs)}</div>`;
-      }
-      bodyHtml = `<div class="gtab-week">${blocks}</div>`;
+      const days = Array.from({ length: 7 }, (_, i) => addDays(mon, i));
+      bodyHtml = `<div class="gtab-week">${gtabTimeGridHtml(days, evs)}</div>`;
     } else {
-      bodyHtml = `<div class="gtab-dayview">${gtabDayListHtml(gtab.day, evs)}</div>`;
+      bodyHtml = `<div class="gtab-dayview">${gtabTimeGridHtml([gtab.day], evs)}</div>`;
     }
     out.push(`<div class="gtab-view"><section class="card gtab-card">
       <div class="gtab-nav"><button type="button" class="btn ghost small" data-action="gtabNav" data-dir="-1" aria-label="前の${unit}">‹</button><h2>${esc(title)}</h2><span class="btn-row"><button type="button" class="btn ghost small" data-action="gtabNav" data-dir="0">今日</button><button type="button" class="btn ghost small" data-action="gtabNav" data-dir="1" aria-label="次の${unit}">›</button></span></div>
@@ -3783,8 +3707,10 @@
     return out.join('');
   }
   // カレンダー表示の左右スワイプで前／次の期間へ（v1.8.0）。横移動が縦より大きく 60px を超えたときだけ。
-  // ドロワーのスワイプとは p4 の swipeBlocked（.gtab-view 内から始めた操作を除外）で競合回避し、
-  // スワイプ直後の click（セル選択など）は飲み込んで誤作動を防ぐ
+  // ジェスチャの所有権（v1.8.1）：(1) ドロワーのドラッグ追随は p4 の swipeBlocked が .gtab-view 内の
+  // タッチを最初から受け付けない。(2) ブラウザの横パンは CSS の touch-action: pan-y で抑え、さらに
+  // 横スワイプと確定した時点で touchmove を preventDefault してネイティブのパンに渡さない。
+  // (3) スワイプ直後の click（セル選択など）は飲み込んで誤作動を防ぐ
   const gSwipe = { on: false, x: 0, y: 0, until: 0 };
   document.addEventListener('touchstart', (e) => {
     gSwipe.on = false;
@@ -3792,6 +3718,12 @@
     if (!e.target.closest('.gtab-view') || e.target.closest('input, textarea, select')) return;
     gSwipe.on = true; gSwipe.x = e.touches[0].clientX; gSwipe.y = e.touches[0].clientY;
   }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (!gSwipe.on) return;
+    const p = e.touches && e.touches[0]; if (!p) return;
+    const dx = p.clientX - gSwipe.x, dy = p.clientY - gSwipe.y;
+    if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.5) e.preventDefault(); // 横スワイプ確定：ブラウザの横パン・ラバーバンドに渡さない
+  }, { passive: false });
   document.addEventListener('touchend', (e) => {
     if (!gSwipe.on) return;
     gSwipe.on = false;
@@ -3878,22 +3810,6 @@
       await pullCalendar().catch(() => {});
       rerender();
     } catch (e) { toast('⚠️ ' + (e.message || e)); }
-  }
-  function homeCountdownCard() {
-    const { up } = sortedCountdowns();
-    if (!up.length) return '';
-    return `<section class="card cd-home"><div class="card-head"><h2>⏳ カウントダウン</h2><a class="link small" href="#countdown">すべて見る</a></div>
-      <ul class="cd-mini">${up.slice(0, 3).map((c) => { const n = cdDays(c); return `<li><a href="#countdown" class="cd-mini-row"><span class="cd-emoji sm" aria-hidden="true">${esc(c.emoji || '⏳')}</span><span class="grow"><b>${esc(trunc(c.title, 22))}</b><span class="muted small"> ${fmtShort(c.date)}</span></span><span class="cd-mini-n ${n === 0 ? 'today' : ''}">${n === 0 ? '今日！' : `あと<b>${n}</b>日`}</span></a></li>`; }).join('')}</ul></section>`;
-  }
-  // ホーム：これからの予定（7日間・Googleカレンダー）
-  function homeScheduleCard() {
-    const t = todayStr(); const end = addDays(t, 7);
-    const evs = calEvents().filter((e) => e.date >= t && e.date <= end);
-    if (!cal.calendar) return '';
-    const rows = evs.slice(0, 6).map((e) => { const n = daysUntil(e.date); return `<li class="sched-row"><span class="sched-d ${n === 0 ? 'today' : ''}">${n === 0 ? '今日' : n === 1 ? '明日' : fmtShort(e.date)}<small>${'日月火水木金土'[new Date(e.date + 'T00:00').getDay()]}</small></span><span class="grow"><b>${esc(trunc(stripHourglass(e.title), 26))}</b><span class="muted small">${evTime(e) ? ' ' + evTime(e) : ' 終日'}${e.location ? '・' + esc(trunc(e.location, 14)) : ''}</span></span></li>`; }).join('');
-    return `<section class="card sched-home"><div class="card-head"><h2>📅 これからの予定</h2><a class="link small" href="#countdown">カウントダウン</a></div>
-      ${rows ? `<ul class="sched-list">${rows}</ul>${evs.length > 6 ? `<p class="muted small">ほか ${evs.length - 6}件</p>` : ''}` : '<p class="muted small">この7日間の予定はありません</p>'}
-      <p class="muted small cal-sync">Googleカレンダー最終取得: ${esc(fmtStamp(cal.calendar.updatedAt || cal.fetchedAt))}</p></section>`;
   }
   function addMonthsStr(base, m) { const [y, mo, d] = base.split('-').map(Number); const dt = new Date(y, mo - 1 + m, 1); const last = new Date(dt.getFullYear(), dt.getMonth() + 1, 0).getDate(); dt.setDate(Math.min(d, last)); return todayStr(dt); }
   function cdPreviewText(v) { return isDateStr(v) ? `${fmtDate(v)} ・ ${cdText(daysUntil(v))}` : '日付を選んでください'; }
@@ -3992,9 +3908,10 @@
     quickAdd: (d) => openQuickAdd({ list: d.list, quadrant: d.quadrant }),
     quickAddDetail: () => { const f = $('form[data-form=quickAdd]', modalBox); if (f && f.title.value.trim()) submitQuickAdd(f, true); else if (f) f.title.focus(); },
     closeModal: () => closeModal(),
-    back: () => { if (history.length > 1) history.back(); else go('#home'); },
+    back: () => { if (history.length > 1) history.back(); else go('#habits'); },
     openItem: (d) => { closeModal(); go('#item/' + d.id); },
     editItem: (d) => openItemEditor(d.id),
+    focusStepAdd: () => { const inp = $('.add-step input'); if (inp) { inp.scrollIntoView({ block: 'center', behavior: 'smooth' }); setTimeout(() => { try { inp.focus({ preventScroll: true }); } catch (e) { inp.focus(); } }, 300); } },
     toggleDone: (d) => {
       const i = getItem(d.id); if (!i) return;
       const snap = snapshot();
@@ -4009,7 +3926,7 @@
       markDeleted(d.id);
       state.journal.forEach((e) => { if (e.linked.includes(d.id)) { e.linked = e.linked.filter((id) => id !== d.id); e.updatedAt = nowIso(); } });
       save(); closeModal();
-      if (route().name === 'item') go('#' + ({ task: 'matrix', inbox: 'inbox', later: 'later', wish: 'wish' }[i.list] || 'home')); else rerender();
+      if (route().name === 'item') go('#' + ({ task: 'matrix', inbox: 'inbox', later: 'later', wish: 'wish' }[i.list] || 'habits')); else rerender();
       undoable('削除しました', snap);
     },
     moveTo: (d) => {
@@ -4149,7 +4066,7 @@
       SYNC_COLLECTIONS.forEach((k) => state[k].forEach((x) => { del[x.id] = nowIso(); }));
       const theme = state.settings.theme;
       state = defaultState(); state.deleted = del; state.settings.theme = theme; state.categoriesAt = nowIso();
-      save(); applyTheme(); go('#home'); undoable('すべて削除しました', snap);
+      save(); applyTheme(); go('#habits'); undoable('すべて削除しました', snap);
     },
     syncNow: async () => { if (!navigator.onLine) { toast('オフラインです'); return; } await syncNow(); toast(sync.lastError ? '⚠️ ' + sync.lastError : '同期しました ✓'); },
     // ヘッダーの更新ボタン：GitHub 同期とカレンダー取得（カレンダー一覧も取り直す）をまとめて実行する
@@ -4216,7 +4133,19 @@
     gevDelete: (d) => deleteGcalEvent(d.cid, d.eid),
     // v1.8.0：詳細シートからカウントダウンに追加（既存の countdownFromEvent を再利用）。追加後はシートを開き直して「カウントダウン中」表示にする
     gevCountdown: (d) => { countdownFromEvent(d.id); openGcalEventEditor(d.cid, d.eid); },
-    gtabDay: (d) => { gtab.day = d.date; gtab.month = d.date.slice(0, 7); rerender(); },
+    gtabDay: (d) => { // v1.8.1：同じ日を 350ms 以内に2回タップしたら日表示（タイムライン）へ。1回目のタップは従来通り選択のみ（遅延なし）
+      const now = Date.now();
+      const dbl = gtab.lastTap && gtab.lastTap.date === d.date && now - gtab.lastTap.t < 350;
+      gtab.day = d.date; gtab.month = d.date.slice(0, 7);
+      if (dbl) { gtab.view = 'day'; gtab.lastTap = null; } else gtab.lastTap = { date: d.date, t: now };
+      rerender();
+    },
+    gtabCol: (d) => { // v1.8.1：週タイムグリッドの列（予定のない場所）のダブルタップでその日の日表示へ。シングルタップでは何もしない
+      const now = Date.now();
+      if (gtab.lastTap && gtab.lastTap.date === d.date && now - gtab.lastTap.t < 350) {
+        gtab.day = d.date; gtab.month = d.date.slice(0, 7); gtab.view = 'day'; gtab.lastTap = null; rerender();
+      } else gtab.lastTap = { date: d.date, t: now };
+    },
     gtabDayView: (d) => { gtab.day = d.date; gtab.month = d.date.slice(0, 7); gtab.view = 'day'; rerender(); },
     gtabNav: (d) => gtabMove(Number(d.dir) || 0),
     gtabView: (d) => { gtab.view = ['month', 'week', 'day'].includes(d.v) ? d.v : 'month'; rerender(); },
@@ -4434,6 +4363,74 @@
     const q = z.dataset.drop === 'none' ? '' : z.dataset.drop;
     const id = dragId; dragId = null;
     setQuadrant(id, q);
+  });
+
+  // モバイル：マトリクスのカードを「長押し→ドラッグ」でも象限移動できるようにする（v1.8.2）。
+  // HTML5 の draggable はタッチで動かないための補完。長押し（280ms・ほぼ静止）が成立するまでは
+  // 通常のスクロールを妨げず、成立後は touchmove を preventDefault してスクロールを止め、
+  // カードのゴーストを指に追随させる。ドロップ先は PC 版と同じ [data-drop] ゾーン＋ setQuadrant。
+  // ドラッグ直後に発生する click（詳細を開く等）は飲み込む。
+  let tdrag = null;
+  let tdragSwallowUntil = 0;
+  const tdPoint = (e) => { const t = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]); return t ? { x: t.clientX, y: t.clientY } : null; };
+  const tdZoneAt = (x, y) => { const el = document.elementFromPoint(x, y); return el && el.closest ? el.closest('[data-drop]') : null; };
+  function tdClear() {
+    if (!tdrag) return;
+    clearTimeout(tdrag.timer);
+    if (tdrag.ghost) tdrag.ghost.remove();
+    if (tdrag.card) tdrag.card.classList.remove('dragging');
+    $$('.drop-over').forEach((x) => x.classList.remove('drop-over'));
+    tdrag = null;
+  }
+  document.addEventListener('touchstart', (e) => {
+    if (tdrag || e.touches.length !== 1) return;
+    const card = e.target.closest && e.target.closest('.card.item[data-id]');
+    if (!card || !card.closest('.quad, .tray')) return;
+    if (e.target.closest('button, a, input, select, textarea, summary, label')) return; // カード内の操作部品からは始めない
+    const p = tdPoint(e); if (!p) return;
+    const t = { id: card.dataset.id, card, x: p.x, y: p.y, active: false, ghost: null, dx: 0, dy: 0, timer: 0 };
+    t.timer = setTimeout(() => {
+      if (tdrag !== t) return;
+      t.active = true;
+      card.classList.add('dragging');
+      const r = card.getBoundingClientRect();
+      const g = card.cloneNode(true);
+      g.removeAttribute('id'); g.removeAttribute('draggable');
+      g.classList.add('drag-ghost'); g.classList.remove('dragging');
+      g.style.width = r.width + 'px'; g.style.left = r.left + 'px'; g.style.top = r.top + 'px';
+      document.body.appendChild(g);
+      t.ghost = g; t.dx = t.x - r.left; t.dy = t.y - r.top;
+      if (navigator.vibrate) { try { navigator.vibrate(10); } catch (err) { /* noop */ } }
+    }, 280);
+    tdrag = t;
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (!tdrag) return;
+    const p = tdPoint(e); if (!p) return;
+    if (!tdrag.active) { if (Math.hypot(p.x - tdrag.x, p.y - tdrag.y) > 10) tdClear(); return; } // 長押し前に動いたらスクロールに譲る
+    e.preventDefault();
+    if (tdrag.ghost) { tdrag.ghost.style.left = (p.x - tdrag.dx) + 'px'; tdrag.ghost.style.top = (p.y - tdrag.dy) + 'px'; }
+    const z = tdZoneAt(p.x, p.y);
+    $$('.drop-over').forEach((x) => x !== z && x.classList.remove('drop-over'));
+    if (z) z.classList.add('drop-over');
+  }, { passive: false });
+  const tdEnd = (e) => {
+    if (!tdrag) return;
+    const wasActive = tdrag.active; const id = tdrag.id; const p = tdPoint(e);
+    const z = wasActive && p ? tdZoneAt(p.x, p.y) : null;
+    tdClear();
+    if (wasActive) {
+      tdragSwallowUntil = Date.now() + 500;
+      if (z) setQuadrant(id, z.dataset.drop === 'none' ? '' : z.dataset.drop);
+    }
+  };
+  document.addEventListener('touchend', tdEnd);
+  document.addEventListener('touchcancel', tdClear);
+  document.addEventListener('click', (e) => {
+    if (Date.now() < tdragSwallowUntil && e.target.closest && e.target.closest('.quad, .tray')) { e.preventDefault(); e.stopPropagation(); }
+  }, true);
+  document.addEventListener('contextmenu', (e) => {
+    if (tdrag && tdrag.active && e.target.closest && e.target.closest('.quad, .tray')) e.preventDefault();
   });
 
   // ───────────────────────── テーマ・起動 ─────────────────────────

@@ -20,6 +20,7 @@
   --q3: #d9a649; --q3-soft: #fbf3e1;
   --q4: #8f9aa6; --q4-soft: #eef0f3;
   --shadow: 0 1px 2px rgba(40, 45, 50, .04), 0 4px 14px rgba(40, 45, 50, .05);
+  --dot-done: #c7ccd1; --dot-left: #79c2e8; --dot-goal: #f08c3a;
   --radius: 16px;
   --radius-sm: 10px;
   --tabbar-h: 60px;
@@ -32,6 +33,7 @@
     --primary: #7fbcad; --primary-strong: #9bd0c3; --primary-soft: #2c3d39; --accent-soft: #3d3129; --danger-soft: #402c2c; --warn-soft: #3d3524;
     --q1-soft: #3f2d2a; --q2-soft: #2c3d39; --q3-soft: #3c3524; --q4-soft: #30353a;
     --shadow: 0 1px 2px rgba(0, 0, 0, .3); color-scheme: dark;
+    --dot-done: #4d545b; --dot-left: #3d7ea6; --dot-goal: #f59e4c;
   }
 }
 :root[data-theme="dark"] {
@@ -39,6 +41,7 @@
   --primary: #7fbcad; --primary-strong: #9bd0c3; --primary-soft: #2c3d39; --accent-soft: #3d3129; --danger-soft: #402c2c; --warn-soft: #3d3524;
   --q1-soft: #3f2d2a; --q2-soft: #2c3d39; --q3-soft: #3c3524; --q4-soft: #30353a;
   --shadow: 0 1px 2px rgba(0, 0, 0, .3); color-scheme: dark;
+  --dot-done: #4d545b; --dot-left: #3d7ea6; --dot-goal: #f59e4c;
 }
 
 * { box-sizing: border-box; }
@@ -46,7 +49,7 @@ html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0; font-family: var(--font); background: var(--bg); color: var(--text);
   font-size: 15px; line-height: 1.6; -webkit-font-smoothing: antialiased;
-  -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none; overscroll-behavior-x: none;
 }
 body.modal-open { overflow: hidden; }
 [hidden] { display: none !important; }
@@ -273,6 +276,12 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .matrix { grid-column: 2; grid-row: 2; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .quad { border-radius: var(--radius); padding: 8px; min-height: 150px; display: flex; flex-direction: column; transition: box-shadow .15s, outline-color .15s; outline: 2px dashed transparent; outline-offset: -2px; }
 .quad.drop-over { outline-color: var(--primary); box-shadow: inset 0 0 0 999px rgba(255, 255, 255, .25); }
+/* v1.8.2：詳細カード下部の accessory 行（カード上部・タイトル直下の操作行とは別のもの。重複ではない） */
+.detail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+/* v1.8.2：モバイル長押しドラッグのゴーストと未分類トレイのドロップ強調 */
+.drag-ghost { position: fixed; z-index: 200; margin: 0; pointer-events: none; opacity: .92; box-shadow: 0 12px 32px rgba(0, 0, 0, .25); }
+.tray.drop-over { outline: 2px dashed var(--primary); outline-offset: -6px; }
+.matrix .card.item, .tray .card.item { -webkit-touch-callout: none; }
 .quad header { display: flex; justify-content: space-between; align-items: flex-start; gap: 4px; margin: 0 2px 6px; }
 .quad h2 { font-size: 12.5px; }
 .quad.q1 h2 { color: #b85a4c; } .quad.q2 h2 { color: var(--primary-strong); } .quad.q3 h2 { color: #9c7424; } .quad.q4 h2 { color: #66717d; }
@@ -1088,9 +1097,11 @@ button.hc-day.before:hover { background: var(--surface-2); }
 .cd-num.past { font-size: 26px; color: var(--muted); }
 .cd-card.is-today { background: linear-gradient(150deg, color-mix(in srgb, #f6d3e4 35%, var(--surface)), var(--surface)); }
 .cd-card.is-past { opacity: .78; }
-.cd-bar { height: 8px; margin: 14px 0 4px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
-.cd-bar span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #9fb6f2, #e9a0bf); }
-.cd-bar-meta { display: flex; justify-content: space-between; }
+/* v1.8.1：カウントダウンのドットグリッド（経過＝グレー／残り＝水色／対象日＝オレンジ） */
+.cd-grid { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 12px; }
+.cd-dot { width: 10px; height: 10px; border-radius: 3px; background: var(--dot-left); }
+.cd-dot.done { background: var(--dot-done); }
+.cd-dot.goal { background: var(--dot-goal); }
 .cd-memo { margin: 10px 0 0; font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
 .cd-link { display: inline-block; margin-top: 8px; }
 .cd-actions { margin-top: 6px; }
@@ -1130,26 +1141,55 @@ button.hc-day.before:hover { background: var(--surface-2); }
 .gtab-card { padding-bottom: 10px; }
 .gtab-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .gtab-nav h2 { font-size: 17px; }
-.gtab-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+/* v1.8.1：列は minmax(0, 1fr)。1fr（=minmax(auto, 1fr)）だと iOS Safari で nowrap チップの
+   min-content が列の最小幅になり、長い予定名があるとグリッドが画面の約2倍幅に膨張して
+   文書全体が横スクロール可能になり、スワイプでパンしたまま戻らなくなる（実機報告）。 */
+.gtab-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; }
 .gtab-grid.dow { margin-bottom: 2px; }
 .gtab-grid.dow span { text-align: center; font-size: 11px; color: var(--muted); font-weight: 700; padding: 2px 0; }
 .gtab-grid.dow span:nth-child(6) { color: #4d6fc8; }
 .gtab-grid.dow span:last-child { color: #d0557c; }
-.gtab-cell { appearance: none; border: 0; background: transparent; color: var(--text); font: inherit; border-radius: 10px; padding: 3px 3px 4px; min-height: 62px; display: flex; flex-direction: column; align-items: stretch; gap: 2px; cursor: pointer; }
+.gtab-cell { appearance: none; border: 0; background: transparent; color: var(--text); font: inherit; border-radius: 10px; padding: 3px 3px 4px; min-height: 62px; display: flex; flex-direction: column; align-items: stretch; gap: 2px; cursor: pointer; min-width: 0; overflow: hidden; }
 .gtab-cell.other { opacity: .35; }
 .gtab-cell .gtab-d { font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; font-size: 12px; text-align: left; padding-left: 2px; }
 .gtab-cell.today .gtab-d { color: #d0557c; font-weight: 800; }
 .gtab-cell.sel { background: var(--primary-soft); }
 .gtab-cell.sel .gtab-d { color: var(--primary-strong); font-weight: 800; }
-.gtab-chips { display: flex; flex-direction: column; gap: 2px; width: 100%; min-height: 13px; }
-.gtab-chip { display: block; font-size: 9.5px; line-height: 1.45; font-weight: 600; color: #fff; border-radius: 4px; padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+.gtab-chips { display: flex; flex-direction: column; gap: 2px; width: 100%; min-height: 13px; min-width: 0; }
+.gtab-chip { display: block; font-size: 9.5px; line-height: 1.45; font-weight: 600; color: #fff; border-radius: 4px; padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; max-width: 100%; box-sizing: border-box; }
 .gtab-more { font-size: 9.5px; color: var(--muted); text-align: left; padding: 0 2px; }
 .gtab-seg { display: flex; gap: 6px; margin-bottom: 10px; }
 .gtab-seg .pill { flex: 1; }
-.gtab-wday { border-top: 1px solid var(--border); padding: 8px 0 6px; }
-.gtab-wday:first-child { border-top: 0; padding-top: 2px; }
-.gtab-whead { appearance: none; border: 0; background: transparent; color: var(--text); font: inherit; display: flex; align-items: baseline; gap: 8px; padding: 2px 0 4px; cursor: pointer; }
-.gtab-wday.today .gtab-whead b { color: #d0557c; }
+/* v1.8.1：カレンダー内の横スワイプは JS（期間移動）が引き取り、ブラウザの横パンには渡さない。
+   縦スクロールは従来通りブラウザに任せる（pan-y）。 */
+.gtab-view { touch-action: pan-y; }
+/* ── 週・日表示のタイムグリッド（v1.8.1、週＝7列／日＝1列の共用描画）── */
+.gtab-tg-headrow, .gtab-tg-adrow { display: flex; align-items: stretch; }
+.gtab-tg-gut { flex: none; width: 40px; }
+.gtab-tg-heads, .gtab-tg-ads { flex: 1; display: grid; gap: 2px; min-width: 0; }
+.gtab-tg-head { appearance: none; border: 0; background: transparent; color: var(--text); font: inherit; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 4px 0 2px; cursor: pointer; min-width: 0; }
+div.gtab-tg-head { cursor: default; }
+.gtab-tg-wd { font-size: 11px; color: var(--muted); font-weight: 700; }
+.gtab-tg-dn { font-size: 15px; font-weight: 700; width: 26px; height: 26px; line-height: 26px; text-align: center; border-radius: 50%; }
+.gtab-tg-dn.today { background: #d0557c; color: #fff; }
+.gtab-tg-adrow { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 3px 0; margin-top: 2px; }
+.gtab-tg-gut > span { display: block; font-size: 10px; color: var(--muted); text-align: right; padding: 3px 6px 0 0; }
+.gtab-tg-adcol { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.gtab-tg-ad { appearance: none; border: 0; border-radius: 4px; color: #fff; font-size: 10px; font-weight: 600; line-height: 1.5; padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; cursor: pointer; max-width: 100%; box-sizing: border-box; }
+.gtab-tg-scroll { overflow-y: auto; max-height: 60vh; }
+.gtab-tg-body { display: flex; height: 1152px; }
+.gtab-tg-gutcol { flex: none; width: 40px; position: relative; }
+.gtab-tg-hour { position: absolute; right: 6px; font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; line-height: 12px; }
+.gtab-tg-cols { flex: 1; display: grid; min-width: 0; background-image: linear-gradient(to bottom, var(--border) 1px, transparent 1px); background-size: 100% 48px; background-position: 0 -1px; }
+.gtab-tg-col { position: relative; border-left: 1px solid var(--border); min-width: 0; }
+.gtab-tg-col:first-child { border-left: 0; }
+.gtab-tgev { position: absolute; border: 0; border-radius: 5px; color: #fff; padding: 2px 4px; font: inherit; font-size: 10.5px; line-height: 1.25; text-align: left; overflow: hidden; cursor: pointer; box-sizing: border-box; z-index: 1; }
+.gtab-tgev b { display: block; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gtab-tgev span { display: block; opacity: .85; font-size: 9.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gtab-tg.week .gtab-tgev { font-size: 9.5px; padding: 1px 3px; }
+.gtab-tg.week .gtab-tgev span { display: none; }
+.gtab-nowline { position: absolute; left: 0; right: 0; height: 2px; background: #d0557c; z-index: 2; pointer-events: none; }
+.gtab-nowline::before { content: ''; position: absolute; left: -3px; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: #d0557c; }
 .gtab-legend { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 10px; }
 .gtab-cal { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
 .gtab-cal i { width: 9px; height: 9px; border-radius: 3px; display: block; }

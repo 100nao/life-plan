@@ -63,13 +63,14 @@
 
   // ───────────────────────── ルーティングと描画 ─────────────────────────
   const main = $('#main');
-  const VIEWS = { home: viewHome, matrix: viewMatrix, wish: viewWish, later: viewLater, lessons: viewLessons, inbox: viewInbox, journal: viewJournal, done: viewDone, search: viewSearch, settings: viewSettings, coach: viewCoach, item: viewItem, ai: viewAI, habits: viewHabits, aisuggest: viewAiSuggest, countdown: viewCountdown, calendar: viewCalendar };
-  const TITLES = { home: 'ホーム', matrix: 'マトリックス', wish: 'TASK', later: '後回しでいい事', lessons: '習い事', inbox: '未整理', journal: 'ジャーナル', done: '完了履歴', search: '検索', settings: '設定', coach: 'コーチに相談', item: '詳細', ai: 'AIに相談', habits: '習慣スタンプ', aisuggest: 'AI提案', countdown: 'カウントダウン', calendar: 'カレンダー' };
+  const VIEWS = { matrix: viewMatrix, wish: viewWish, later: viewLater, lessons: viewLessons, inbox: viewInbox, journal: viewJournal, done: viewDone, search: viewSearch, settings: viewSettings, coach: viewCoach, item: viewItem, ai: viewAI, habits: viewHabits, aisuggest: viewAiSuggest, countdown: viewCountdown, calendar: viewCalendar };
+  const TITLES = { matrix: 'マトリックス', wish: 'TASK', later: '後回しでいい事', lessons: '習い事', inbox: '未整理', journal: 'ジャーナル', done: '完了履歴', search: '検索', settings: '設定', coach: 'コーチに相談', item: '詳細', ai: 'AIに相談', habits: '習慣スタンプ', aisuggest: 'AI提案', countdown: 'カウントダウン', calendar: 'カレンダー' };
   function route() {
     const h = decodeURIComponent(location.hash.replace(/^#\/?/, ''));
     const idx = h.indexOf('/');
     const name = idx >= 0 ? h.slice(0, idx) : h;
-    return { name: VIEWS[name] ? name : 'home', arg: idx >= 0 ? h.slice(idx + 1) : '' };
+    // v1.8.1：ホーム廃止。既定ルートは週間スタンプ（habits）。#home や不明な名前も habits に寄せる
+    return { name: VIEWS[name] ? name : 'habits', arg: idx >= 0 ? h.slice(idx + 1) : '' };
   }
   let pendingRender = false;
   function render(keepScroll) {
@@ -94,6 +95,7 @@
     if (changed && !keepScroll) { main.classList.remove('view-enter'); void main.offsetWidth; main.classList.add('view-enter'); }
     moveTabIndicator(changed);
     if (r.name === 'ai' && !keepScroll) aiScrollBottom();
+    if (r.name === 'calendar') positionTgScroll(); // v1.8.1：週・日タイムグリッドの初期スクロール位置（p5）
     document.body.classList.toggle('route-ai', r.name === 'ai');
     document.body.classList.toggle('route-matrix', r.name === 'matrix'); // v1.8.0：マトリクスは見出しなし・ほぼ全画面
     if (r.name === 'search' && !keepScroll) setTimeout(() => { const s = $('#searchInput'); if (s) s.focus(); }, 50);
@@ -313,7 +315,7 @@
         <input name="title" class="big-input" placeholder="何をしたい？" required autocomplete="off" autofocus enterkeyhint="done" aria-label="タイトル">
         <div class="field"><span class="field-label">追加先</span><div class="seg wrap">${dests.map(([k, l]) => `<label class="pill-radio"><input type="radio" name="dest" value="${k}" ${def === k ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div></div>
         <div class="field qa-quad"><span class="field-label">緊急度 × 重要度</span>${quadSelect('quadrant', preset.quadrant || '')}</div>
-        <div class="field qa-cat"><span class="field-label">カテゴリ</span><select name="category">${catOptions('', null)}</select></div>
+        <div class="field qa-cat"><span class="field-label">カテゴリ</span><select name="category">${catOptions('プライベート', null)}</select></div>
         <div class="btn-row end"><button type="button" class="btn ghost" data-action="quickAddDetail">詳しく入力</button><button class="btn primary" type="submit">追加</button></div>
       </form>`, { onOpen: (box) => {
       const upd = () => { const d = $('input[name=dest]:checked', box).value; $('.qa-quad', box).hidden = d === 'lesson'; $('.qa-cat', box).hidden = d === 'lesson' || d === 'inbox'; };
@@ -353,6 +355,7 @@
           <label class="field"><span class="field-label">目標日（任意）</span><input type="date" name="targetDate" value="${esc(i.targetDate)}"></label>
         </div>
         <div class="field"><span class="field-label">緊急度 × 重要度</span>${quadSelect('quadrant', i.quadrant)}</div>
+        <div class="field"><span class="field-label">目安時間</span><div class="seg wrap"><label class="pill-radio"><input type="radio" name="estimate" value="" ${!i.estimate ? 'checked' : ''}><span>なし</span></label>${ESTIMATES.map((m) => `<label class="pill-radio"><input type="radio" name="estimate" value="${m}" ${i.estimate === m ? 'checked' : ''}><span>${estLabel(m)}</span></label>`).join('')}</div></div>
         <label class="field"><span class="field-label">タグ（カンマ区切り）</span><input name="tags" value="${esc(i.tags.join(', '))}" autocomplete="off"></label>
         <div class="btn-row between"><button type="button" class="btn ghost danger" data-action="deleteItem" data-id="${i.id}">削除</button>
           <span class="btn-row"><button type="button" class="btn ghost" data-action="closeModal">キャンセル</button><button class="btn primary" type="submit">保存</button></span></div>
@@ -369,7 +372,7 @@
     const prevList = i.list;
     Object.assign(i, {
       title, notes: String(fd.get('notes') || ''), list: fd.get('list'), category: normCategory(fd.get('category') || ''), importance: fd.get('importance'),
-      timeframe: fd.get('timeframe') || '', targetDate: fd.get('targetDate') || '', quadrant: fd.get('quadrant') || '',
+      timeframe: fd.get('timeframe') || '', targetDate: fd.get('targetDate') || '', quadrant: fd.get('quadrant') || '', estimate: Number(fd.get('estimate') || 0),
       tags: String(fd.get('tags') || '').split(/[,、]/).map((s) => s.trim()).filter(Boolean),
     });
     touch(i, prevList !== i.list);

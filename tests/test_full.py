@@ -239,7 +239,11 @@ with sync_playwright() as p:
     pg.goto(URL); wait_idle(pg, 800)
 
     # ── 空の状態 ──
-    check('空のホームにようこそカード', pg.locator('[data-action=addMemoSamples]').count() == 1 and S(pg, 'LifePlan.state.items.length') == 0)
+    check('既定ルート：起動時は週間スタンプ（習慣スタンプの空画面）', '習慣スタンプ' in pg.inner_text('#main') and pg.locator('.habit-empty').count() == 1 and S(pg, 'LifePlan.state.items.length') == 0)
+    check('下部タブ：5つで先頭が週間スタンプ', pg.evaluate("[...document.querySelectorAll('.tabbar a:not(.pc-only)')].map(a => a.textContent.trim())") == ['週間スタンプ', 'マトリクス', 'TASK', 'カウントダウン', 'カレンダー'])
+    pg.evaluate("location.hash = '#matrix'"); wait_idle(pg, 300)
+    pg.click('.tabbar a[data-nav=habits]'); wait_idle(pg, 300)
+    check('タブ：週間スタンプをタップで習慣スタンプ画面', '習慣スタンプ' in pg.inner_text('#main') and S(pg, 'location.hash') == '#habits')
     check('個人データは自動で入っていない', S(pg, 'LifePlan.state.items.length + LifePlan.state.lessons.length + LifePlan.state.journal.length') == 0)
 
     # ── クイック追加（FAB）──
@@ -254,7 +258,7 @@ with sync_playwright() as p:
 
     # ── 編集 ──
     pg.evaluate(f"location.hash = '#item/{tid}'"); wait_idle(pg)
-    pg.click('[data-action=editItem]'); wait_idle(pg, 300)
+    pg.click('.detail-top [data-action=editItem]'); wait_idle(pg, 300)
     pg.fill('form[data-form=item] input[name=title]', '引っ越しの準備')
     pg.fill('form[data-form=item] textarea[name=notes]', '年内に')
     pg.click('form[data-form=item] button[type=submit]'); wait_idle(pg)
@@ -353,7 +357,7 @@ with sync_playwright() as p:
     pg.evaluate("""(ago) => { const s = JSON.parse(localStorage.getItem('lifeplan.v1')); s.items.forEach(i => { if (['英会話','ICL予約する','運動'].includes(i.title)) { i.createdAt = ago; i.lastProgressAt = ago; } }); localStorage.setItem('lifeplan.v1', JSON.stringify(s)); }""", ago)
     pg.reload(); wait_idle(pg, 800)
     pg.evaluate("location.hash = '#home'"); wait_idle(pg)
-    check('停滞：ホームに「ずっとできていない事」', pg.locator('.stuck-row').count() >= 3)
+    check('#home は週間スタンプへ寄せる（旧ホーム廃止）', '習慣スタンプ' in pg.inner_text('#main'))
     sid = idof('英会話')
     pg.evaluate(f"location.hash = '#item/{sid}'"); wait_idle(pg)
     check('停滞：詳細に経過日数', '20日' in pg.inner_text('#main'))
@@ -461,18 +465,20 @@ with sync_playwright() as p:
     pg.evaluate("location.hash = '#home'"); pg.reload(); wait_idle(pg, 2500)
     check('起動時に自動読み込み（リモートの変更を反映）', S(pg, "LifePlan.state.items.some(i => i.id === 'remote-1')"))
     check('コーチ受信箱の自動取り込み', S(pg, "LifePlan.state.coachNotes.filter(c => c.source === 'github').length") == 2)
-    check('ホームに「コーチからの新着アドバイス」', pg.locator('.coach-new').count() == 1 and 'コーチからの新着アドバイス' in pg.inner_text('.coach-new'))
+    pg.evaluate("location.hash = '#coach'"); wait_idle(pg, 400)
+    check('コーチ画面に未読アドバイス（受信箱から）', 'コーチからのアドバイス' in pg.inner_text('#main') and '今週のフォーカス' in pg.inner_text('#main'))
     check('コーチの提案ステップを自動適用', S(pg, "LifePlan.state.items.find(i => i.title === 'ICL予約する').steps.length") == 2)
     check('未読バッジ', S(pg, "(() => { const b = document.getElementById('coachBadge'); return !!b && !b.hidden && b.textContent === '2'; })()"))
     pg.evaluate('window.scrollTo(0,0)')
-    shot(pg, 'sp_home_coach.png')
+    shot(pg, 'sp_coach_inbox.png')
     pg.wait_for_timeout(4500)
     after = gh.get_json('data/life-plan.json')
     check('取り込んだアドバイスも GitHub に保存', len(after['data']['coachNotes']) >= 3)
     pg.evaluate("location.hash = '#home'"); pg.reload(); wait_idle(pg, 2000)
     check('同じ受信箱を再度読んでも重複しない', S(pg, "LifePlan.state.coachNotes.filter(c => c.source === 'github').length") == 2)
-    pg.click('.coach-new [data-action=markAllRead]'); wait_idle(pg)
-    check('すべて既読', pg.locator('.coach-new').count() == 0 and S(pg, "document.getElementById('coachBadge').hidden"))
+    pg.evaluate("location.hash = '#coach'"); wait_idle(pg, 400)
+    pg.click('#main [data-action=markAllRead]'); wait_idle(pg)
+    check('すべて既読', pg.locator('#main [data-action=markAllRead]').count() == 0 and S(pg, "document.getElementById('coachBadge').hidden"))
 
     # 競合（409）→ 再試行
     rr = gh.get_json('data/life-plan.json'); rr['data']['items'].insert(0, {"id": "remote-2", "list": "later", "title": "競合テスト（リモート）", "createdAt": "2026-10-30T00:00:00.000Z", "updatedAt": datetime.datetime.now(datetime.UTC).replace(tzinfo=None).isoformat() + 'Z'})
@@ -505,7 +511,7 @@ with sync_playwright() as p:
 
     # ── AIに相談（Gemini・モック）──
     pg.evaluate("location.hash = '#home'"); wait_idle(pg)
-    check('ホームに「AIに相談」入口', pg.locator('a.ai-entry[href="#ai"]').count() == 1)
+    check('旧ホーム廃止：#home は週間スタンプ（習慣スタンプ画面）に着地', '習慣スタンプ' in pg.inner_text('#main'))
     pg.evaluate("location.hash = '#coach'"); wait_idle(pg)
     check('コーチ画面に「AIに相談」入口', pg.locator('a.ai-entry[href="#ai"]').count() == 1)
     pg.click('a.ai-entry[href="#ai"]'); wait_idle(pg)
@@ -693,9 +699,9 @@ with sync_playwright() as p:
     pg.evaluate('window.scrollTo(0,0)'); wait_idle(pg, 200); shot(pg, 'sp_journal_import.png')
 
     # ── スクリーンショット（モバイル）──
-    pg.evaluate("location.hash = '#home'"); wait_idle(pg, 500); pg.evaluate('window.scrollTo(0,0)')
-    shot(pg, 'sp_home.png')
-    shot(pg, 'sp_home_full.png', full=True)
+    pg.evaluate("location.hash = '#habits'"); wait_idle(pg, 500); pg.evaluate('window.scrollTo(0,0)')
+    shot(pg, 'sp_habits.png')
+    shot(pg, 'sp_habits_full.png', full=True)
     pg.evaluate("location.hash = '#wish'"); wait_idle(pg, 500); shot(pg, 'sp_wishlist.png')
     pg.evaluate("location.hash = '#matrix'"); wait_idle(pg, 500); shot(pg, 'sp_matrix.png')
     pg.evaluate("location.hash = '#journal'"); wait_idle(pg, 500); shot(pg, 'sp_journal.png')
@@ -704,12 +710,12 @@ with sync_playwright() as p:
     pg.evaluate(f"location.hash = '#matrix'"); wait_idle(pg, 300)
     pg.locator('.matrix .card.item [data-action=moveSheet]').first.click(); wait_idle(pg, 400); shot(pg, 'sp_matrix_move.png'); pg.click('#modal [data-action=closeModal]')
     # 暗いテーマ
-    pg.evaluate("document.documentElement.setAttribute('data-theme','dark')"); pg.evaluate("location.hash = '#home'"); wait_idle(pg, 400); shot(pg, 'sp_home_dark.png')
+    pg.evaluate("document.documentElement.setAttribute('data-theme','dark')"); pg.evaluate("location.hash = '#habits'"); wait_idle(pg, 400); shot(pg, 'sp_habits_dark.png')
     pg.evaluate("document.documentElement.removeAttribute('data-theme')")
 
     # ── v2 デザイン：ガラスのタブバー・ドロワー・背景 ──
     pg.evaluate("location.hash = '#home'"); wait_idle(pg, 600); pg.evaluate('window.scrollTo(0,0)')
-    check('v2：ホームのヒーロー（キャラクター）', pg.locator('.hero .hero-avatar').count() == 1 and pg.locator('.topbar .avatar').is_visible())
+    check('v2：先頭タブは週間スタンプで選択中', pg.locator('.tabbar a.active[data-nav=habits]').count() == 1 and pg.evaluate("[...document.querySelectorAll('.tabbar a:not(.pc-only)')][0].dataset.nav") == 'habits' and pg.locator('.topbar .avatar').is_visible())
     check('v2：モバイルのタブは5つ', pg.evaluate("[...document.querySelectorAll('.tabbar a')].filter(a => a.offsetParent).length") == 5)
     tb = pg.locator('.tabbar').bounding_box()
     check('v2：タブバーは浮いたピル型', tb['x'] >= 10 and tb['y'] + tb['height'] <= 844 - 8 and pg.evaluate("parseFloat(getComputedStyle(document.querySelector('.tabbar')).borderRadius)") >= 24, tb)
@@ -741,7 +747,7 @@ with sync_playwright() as p:
     check('v2：ドロワーを開く', pg.evaluate("document.body.classList.contains('drawer-open')") and pg.locator('#drawer .drawer-nav a').count() == 10 and pg.get_attribute('#menuBtn', 'aria-expanded') == 'true')
     check('v2：ドロワーで現在地を表示', pg.locator('#drawer a.active[data-nav=journal]').count() == 1)
     shot(pg, 'sp_drawer_v2.png')
-    pg.click('#drawer a[data-nav=habits]'); wait_idle(pg, 550)
+    pg.click('#drawer a[data-nav=habits] >> nth=0'); wait_idle(pg, 550)
     check('v2：ドロワーから移動して閉じる', '習慣スタンプ' in pg.title() and not pg.evaluate("document.body.classList.contains('drawer-open')") and pg.is_hidden('#drawerBackdrop'))
     pg.click('#menuBtn'); wait_idle(pg, 450); pg.mouse.click(20, 400); wait_idle(pg, 450)
     check('v2：背景タップで閉じる', not pg.evaluate("document.body.classList.contains('drawer-open')"))
@@ -754,10 +760,10 @@ with sync_playwright() as p:
     imgs_ok = pg.evaluate("Promise.all(['images/bg-mist.jpg','images/bg-forest.jpg','images/bg-sunrise.jpg','images/bg-ocean.jpg','images/avatar-128.png','images/avatar-256.png'].map(u => fetch(u).then(r => r.ok)))")
     check('v2：画像はすべてローカル', all(imgs_ok))
     # スクリーンショット（v2）
-    pg.evaluate("location.hash = '#home'"); wait_idle(pg, 700); pg.evaluate('window.scrollTo(0,0)'); wait_idle(pg, 200); shot(pg, 'sp_home_v2.png')
+    pg.evaluate("location.hash = '#habits'"); wait_idle(pg, 700); pg.evaluate('window.scrollTo(0,0)'); wait_idle(pg, 200); shot(pg, 'sp_habits_v2.png')
     pg.evaluate("location.hash = '#matrix'"); wait_idle(pg, 700); shot(pg, 'sp_matrix_v2.png')
     pg.evaluate("location.hash = '#journal'"); wait_idle(pg, 700); shot(pg, 'sp_journal_v2.png')
-    pg.evaluate("document.documentElement.setAttribute('data-theme','dark')"); pg.evaluate("location.hash = '#home'"); wait_idle(pg, 700); shot(pg, 'sp_home_v2_dark.png')
+    pg.evaluate("document.documentElement.setAttribute('data-theme','dark')"); pg.evaluate("location.hash = '#habits'"); wait_idle(pg, 700); shot(pg, 'sp_habits_v2_dark.png')
     pg.evaluate("location.hash = '#matrix'"); wait_idle(pg, 600); shot(pg, 'sp_matrix_v2_dark.png')
     pg.evaluate("document.documentElement.removeAttribute('data-theme')")
     # 動きを減らす設定
@@ -772,7 +778,7 @@ with sync_playwright() as p:
     def dd(n): return (TD - datetime.timedelta(days=n)).isoformat()
     def pomu(done, start, today=None):
         return pg.evaluate("([d, s, t]) => LifePlan.pomu({id: 'x', name: 't', startDate: s, done: d}, t)", [done, start, today or TD.isoformat()])
-    check('バージョン 1.8.0', S(pg, 'LifePlan.version') == '1.8.0')
+    check('バージョン 1.8.2', S(pg, 'LifePlan.version') == '1.8.2')
     check('習慣：state.habits が配列', S(pg, 'Array.isArray(LifePlan.state.habits)'))
     # ぽむのルール
     r = pomu([], dd(0)); check('ぽむ：0日はたまご（stage-1）', r['key'] == 'stage-1' and r['lv'] == 1, r)
@@ -837,15 +843,15 @@ with sync_playwright() as p:
     check('習慣：Lv.3 ぽむりん', 'ぽむりん' in pg.inner_text('.pomu-card') and 'Lv.3' in pg.inner_text('.pomu-card'))
     check('習慣：ルートのヒント', pg.locator('.pomu-hint').count() >= 1 and 'お金持ちルート' in pg.inner_text('.pomu-card'))
     pg.evaluate('window.scrollTo(0,0)'); wait_idle(pg, 200); shot(pg, 'sp_habit.png'); shot(pg, 'sp_habit_full.png', True)
-    # 2つ目（ホームから押す）
+    # 2つ目（週間スタンプの一覧から押す）
     pg.evaluate(f"""(() => {{ LifePlan.state.habits.push({{id: 'hb-villain', emoji: '🏃', name: 'ストレッチ', startDate: '{dd(30)}', done: {json.dumps([dd(i) for i in range(15, 31)])}, seen: 'villain-3', unlocked: ['villain-3'], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()}}); localStorage.setItem('lifeplan.v1', JSON.stringify(LifePlan.state)); }})()""")
-    pg.evaluate("location.hash = '#home'"); pg.reload(); wait_idle(pg, 900)
-    check('習慣：ホームに今日のスタンプカード', pg.locator('.habits-home .habit-row').count() == 2 and '1/2' in pg.inner_text('.habits-home'))
-    check('習慣：ホームのサムネイル（256）', pg.evaluate("[...document.querySelectorAll('.habits-home .hr-pomu img')].every(i => /-256\\.webp$/.test(i.src) && i.complete && i.naturalWidth > 0)"))
-    pg.evaluate("window.scrollTo(0, document.querySelector('.habits-home').getBoundingClientRect().top + scrollY - 70)"); wait_idle(pg, 300)
-    shot(pg, 'sp_home_habits.png')
-    pg.click('.habits-home .habit-row:has-text("ストレッチ") [data-action=habitToggle]'); wait_idle(pg, 600)
-    check('習慣：ホームからタップでスタンプ', TD.isoformat() in S(pg, "LifePlan.state.habits.find(h => h.id === 'hb-villain').done") and '2/2' in pg.inner_text('.habits-home'))
+    pg.evaluate("location.hash = '#habits'"); pg.reload(); wait_idle(pg, 900)
+    check('習慣：週間スタンプの一覧に2件（今日済みは1件）', pg.locator('#main .habit-row').count() == 2 and pg.locator('#main .habit-row.is-done').count() == 1)
+    check('習慣：一覧のサムネイル（256）', pg.evaluate("[...document.querySelectorAll('#main .habit-row .hr-pomu img')].every(i => /-256\\.webp$/.test(i.src) && i.complete && i.naturalWidth > 0)"))
+    pg.evaluate("window.scrollTo(0, document.querySelector('#main .habit-list').getBoundingClientRect().top + scrollY - 70)"); wait_idle(pg, 300)
+    shot(pg, 'sp_habits_stamp.png')
+    pg.click('#main .habit-row:has-text("ストレッチ") [data-action=habitToggle]'); wait_idle(pg, 600)
+    check('習慣：一覧からタップでスタンプ', TD.isoformat() in S(pg, "LifePlan.state.habits.find(h => h.id === 'hb-villain').done") and pg.locator('#main .habit-row.is-done').count() == 2)
     pg.evaluate("document.getElementById('pomuCelebrate') && document.getElementById('pomuCelebrate').remove()")
     # 図鑑
     pg.evaluate("location.hash = '#habits/zukan'"); wait_idle(pg, 700)
@@ -894,7 +900,7 @@ with sync_playwright() as p:
     hh = S(mp, 'LifePlan.state.habits')
     check('移行：〇と×が同じ日なら〇を優先・重複と不正な日付は除く', hh[0]['missed'] == ['2026-01-03'] and hh[0]['done'] == ['2026-01-02'], hh)
     mc.close()
-    check('習慣：ドロワーに「習慣スタンプ」', pg.locator('#drawer a[data-nav=habits]').count() == 1)
+    check('習慣：ドロワーに週間スタンプと習慣スタンプ（併存）', pg.evaluate("[...document.querySelectorAll('#drawer a[data-nav=habits]')].map(a => a.textContent.trim())") == ['🐣週間スタンプ', '🐣習慣スタンプ'])
 
     # ════════ v1.3.1 ════════
     def wait_js(p_, expr, timeout=10000):
@@ -1034,10 +1040,10 @@ with sync_playwright() as p:
     check('色分け：統計（できなかった日）は青', col('.hsm-n', 'color') == 'rgb(59, 125, 216)')
     bp.evaluate("document.querySelector('.habit-cal').scrollIntoView({block: 'start'}); window.scrollBy(0, -70)"); wait_idle(bp, 300)
     shot(bp, 'v132_habit.png')
-    bp.evaluate("location.hash = '#home'"); wait_idle(bp, 600); rm_celebrate(bp)
+    bp.evaluate("location.hash = '#habits'"); wait_idle(bp, 600); rm_celebrate(bp)
     if bp.locator('.stamp-btn').count(): bp.click('.stamp-btn >> nth=0')
     wait_idle(bp, 500); rm_celebrate(bp)
-    check('色分け：ホームの今日のスタンプも緑', bp.locator('.stamp-btn.on').count() == 0 or col('.stamp-btn.on', 'backgroundColor') == 'rgb(230, 244, 234)')
+    check('色分け：週間スタンプ一覧の今日のスタンプも緑', bp.locator('.stamp-btn.on').count() == 0 or col('.stamp-btn.on', 'backgroundColor') == 'rgb(230, 244, 234)')
     # 2年より前には戻れない（開始日がそれより新しいとき）
     for _ in range(30):
         b = bp.locator('[data-action=habitMonth][data-dir="-1"]')
@@ -1054,12 +1060,12 @@ with sync_playwright() as p:
             cdp.send('Input.dispatchTouchEvent', {'type': 'touchMove', 'touchPoints': [{'x': x0 + (x1 - x0) * k / steps, 'y': y0 + (y1 - y0) * k / steps}]}); pg.wait_for_timeout(ms)
         cdp.send('Input.dispatchTouchEvent', {'type': 'touchEnd', 'touchPoints': []}); pg.wait_for_timeout(550)
     is_open = lambda: pg.evaluate("document.body.classList.contains('drawer-open')")
-    pg.evaluate("location.hash = '#home'"); wait_idle(pg, 600); pg.evaluate('window.scrollTo(0,0)')
+    pg.evaluate("location.hash = '#habits'"); wait_idle(pg, 600); pg.evaluate('window.scrollTo(0,0)')
     swipe(340, 520, 110, 528)
     db = pg.locator('#drawer').bounding_box()
     check('スワイプ：右から左へなぞるとメニューが開く', is_open() and pg.is_visible('#drawerBackdrop'))
     check('スワイプ：メニューは右側から出る', db and abs(db['x'] + db['width'] - 390) <= 2 and db['x'] > 30, db)
-    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.8.0' in pg.inner_text('#drawer [data-action=forceUpdate]'))
+    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.8.2' in pg.inner_text('#drawer [data-action=forceUpdate]'))
     shot(pg, 'v131_menu.png')
     swipe(90, 500, 330, 505)
     check('スワイプ：左から右へで閉じる', not is_open())
@@ -1199,8 +1205,8 @@ with sync_playwright() as p:
     oc.close()
     # 古いジャーナル（photos なし）も読める
     check('写真：古いジャーナルは photos が空配列', S(pg, "LifePlan.state.journal.every(e => Array.isArray(e.photos))"))
-    # ホームの最近のジャーナルもそのまま
-    pg.evaluate("location.hash = '#home'"); wait_idle(pg, 500)
+    # ジャーナル一覧はそのまま
+    pg.evaluate("location.hash = '#journal'"); wait_idle(pg, 500)
     # ── v1.4.0：Gemini の毎日の分析・🤖 AI提案（別画面）──
     ac = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2, locale='ja-JP', timezone_id='Asia/Tokyo', service_workers='block')
     ac.route('https://generativelanguage.googleapis.com/**', gem.handle)
@@ -1219,7 +1225,6 @@ with sync_playwright() as p:
     na = len(gem.ana_reqs)
     ap.reload(); wait_idle(ap, 2200)
     check('分析：自動分析オフなら呼ばない', len(gem.ana_reqs) == na and S(ap, 'LifePlan.state.aiAnalyses.length') == 0)
-    check('分析：ホームに案内カード', ap.locator('#anaCard').count() == 1 and '自動分析はオフ' in ap.inner_text('#anaCard'))
     # 設定でオン → その場で分析
     ap.evaluate("location.hash = '#settings'"); wait_idle(ap, 500)
     check('設定：「毎日の自動分析」「AI提案を自動で自分のリストに移す」', ap.locator('[data-change=aiDaily]').count() == 1 and ap.locator('[data-change=aiAutoMove]').count() == 1
@@ -1237,46 +1242,35 @@ with sync_playwright() as p:
     check('AI提案：最大3件＋既存タスクと重複しない', len(sg) == 2 and all(s['title'] != '英会話の体験レッスン' for s in sg) and all(s['title'] != '4件目は入らない' for s in sg), [s['title'] for s in sg])
     check('AI提案：不正な象限は q2', next(s for s in sg if s['title'] == 'パスポートの写真を撮る')['quadrant'] == 'q2')
     check('AI提案：自分のタスクには入らない', S(ap, 'LifePlan.state.items.length') == 2 and all(s['status'] == 'open' and s['source'] == 'gemini' for s in sg))
-    ap.evaluate("location.hash = '#home'"); wait_idle(ap, 500)
-    hc = ap.inner_text('#anaCard')
-    check('ホーム：要約・気づき・プレビュー・「AI提案を見る（2件）」', '英会話が2週間止まっています' in hc and ap.locator('#anaCard .ana-insights li').count() == 3 and ap.locator('#anaCard .ana-preview li').count() == 2 and 'AI提案を見る（2件）' in hc)
-    check('ホーム：追加ボタンは置かない', ap.locator('#anaCard [data-action=aiSugMove]').count() == 0 and ap.locator('#anaCard [data-action=aiSugMoveAll]').count() == 0)
-    check('ホーム：もう一度分析（あと3回）', 'あと3回' in ap.inner_text('#anaCard [data-action=anaRerun]'))
+    ap.evaluate("location.hash = '#aisuggest'"); wait_idle(ap, 500)
+    check('AI提案：分析の提案が画面に並ぶ', ap.locator('.sug-card').count() == 2)
     ap.evaluate('window.scrollTo(0,0)'); wait_idle(ap, 200)
-    shot(ap, 'v140_home_analysis.png')
     # 1日1回：開き直しても呼ばない
     ap.reload(); wait_idle(ap, 2200)
     check('分析：同じ日に開き直しても再分析しない', len(gem.ana_reqs) == na + 1 and S(ap, 'LifePlan.aiDaily().autoDate') == TD.isoformat())
     ap.evaluate("document.dispatchEvent(new Event('visibilitychange'))"); wait_idle(ap, 1200)
     check('分析：画面に戻っても再分析しない', len(gem.ana_reqs) == na + 1)
-    # たたむ
-    ap.click('[data-action=anaCollapse]'); wait_idle(ap, 200)
-    check('ホーム：分析カードをたためる', ap.locator('#anaCard.collapsed').count() == 1 and ap.locator('#anaCard .ana-summary').count() == 0 and ap.locator('#anaCard .ana-link').count() == 1)
-    ap.reload(); wait_idle(ap, 600)
-    check('ホーム：たたんだ状態を覚える', ap.locator('#anaCard.collapsed').count() == 1)
-    ap.click('[data-action=anaCollapse]'); wait_idle(ap, 200)
     # 解析：コードフェンス・壊れた応答
     pf = ap.evaluate("LifePlan.parseAnalysis('はい\\n```json\\n' + JSON.stringify({summary: 'S', insights: ['a'], taskSuggestions: [{title: 'T', quadrant: 'q3', steps: ['s1']}]}) + '\\n```')")
     check('解析：コードフェンス付き JSON', pf['ok'] and pf['summary'] == 'S' and pf['suggestions'][0]['quadrant'] == 'q3' and pf['suggestions'][0]['steps'] == ['s1'], pf)
     pgb = ap.evaluate("LifePlan.parseAnalysis('ただの文章です。JSONではありません')")
     check('解析：壊れた応答は要約だけ', not pgb['ok'] and 'ただの文章' in pgb['summary'] and pgb['suggestions'] == [], pgb)
-    # もう一度分析（1日3回まで）：壊れた応答 → 要約だけ表示
+    # もう一度分析（1日3回まで）：壊れた応答 → 要約だけ表示（v1.8.1：ホーム廃止のため API 直呼び＋状態で検証）
     gem.ana_mode = 'garbage'
-    ap.click('#anaCard [data-action=anaRerun]'); wait_js(ap, "!LifePlan.aiDaily().busy && LifePlan.aiDaily().manualLeft === 2", 8000); wait_idle(ap, 300)
-    check('もう一度分析：壊れた応答でも落ちず要約を表示', 'うまく整理できませんでした' in ap.inner_text('#anaCard') and S(ap, 'LifePlan.state.aiAnalyses.length') == 1 and S(ap, 'LifePlan.state.aiAnalyses[0].runs') == 2)
+    ap.evaluate('LifePlan.runAnalysis()'); wait_js(ap, "!LifePlan.aiDaily().busy && LifePlan.aiDaily().manualLeft === 2", 8000); wait_idle(ap, 300)
+    check('もう一度分析：壊れた応答でも落ちず記録は1件のまま', S(ap, 'LifePlan.state.aiAnalyses.length') == 1 and S(ap, 'LifePlan.state.aiAnalyses[0].runs') == 2)
     check('もう一度分析：提案は消えない', S(ap, "LifePlan.state.aiSuggestions.filter(s => s.status === 'open').length") == 2)
     gem.ana_mode = 'fenced'
-    ap.click('#anaCard [data-action=anaRerun]'); wait_js(ap, "!LifePlan.aiDaily().busy && LifePlan.aiDaily().manualLeft === 1", 8000); wait_idle(ap, 300)
-    check('もう一度分析：フェンス付き JSON も読める・提案は重複しない', '英会話が2週間止まっています' in ap.inner_text('#anaCard') and S(ap, 'LifePlan.state.aiSuggestions.length') == 2)
-    ap.click('#anaCard [data-action=anaRerun]'); wait_js(ap, "!LifePlan.aiDaily().busy && LifePlan.aiDaily().manualLeft === 0", 8000); wait_idle(ap, 300)
+    ap.evaluate('LifePlan.runAnalysis()'); wait_js(ap, "!LifePlan.aiDaily().busy && LifePlan.aiDaily().manualLeft === 1", 8000); wait_idle(ap, 300)
+    check('もう一度分析：フェンス付き JSON も読める・提案は重複しない', '英会話が2週間止まっています' in S(ap, 'LifePlan.state.aiAnalyses[0].summary') and S(ap, 'LifePlan.state.aiSuggestions.length') == 2)
+    ap.evaluate('LifePlan.runAnalysis()'); wait_js(ap, "!LifePlan.aiDaily().busy && LifePlan.aiDaily().manualLeft === 0", 8000); wait_idle(ap, 300)
     n3 = len(gem.ana_reqs)
-    check('もう一度分析：3回使うとボタンが押せない', ap.locator('#anaCard [data-action=anaRerun]').is_disabled() and 'あと0回' in ap.inner_text('#anaCard'))
+    check('もう一度分析：3回使うと上限（あと0回）', S(ap, 'LifePlan.aiDaily().manualLeft') == 0)
     ap.evaluate('LifePlan.runAnalysis()'); wait_idle(ap, 500)
     check('もう一度分析：4回目は呼ばない', len(gem.ana_reqs) == n3 and '3回まで' in ap.inner_text('#toast'))
     # 🤖 AI提案の画面
-    ap.evaluate("location.hash = '#home'"); wait_idle(ap, 300)
-    ap.click('#anaCard .ana-link'); wait_idle(ap, 500)
-    check('AI提案：ホームからリンクで開く', S(ap, 'location.hash') == '#aisuggest' and ap.locator('.sug-card').count() == 2 and '🤖 AI提案' in ap.inner_text('#main'))
+    ap.evaluate("location.hash = '#aisuggest'"); wait_idle(ap, 500)
+    check('AI提案：画面に提案カード', S(ap, 'location.hash') == '#aisuggest' and ap.locator('.sug-card').count() == 2 and '🤖 AI提案' in ap.inner_text('#main'))
     ap.click('#menuBtn'); wait_idle(ap, 400)
     check('メニュー：AI提案（件数バッジ）', ap.locator('#drawer a[href="#aisuggest"]').count() == 1 and ap.inner_text('#drawer a[href="#aisuggest"] .sug-badge') == '2')
     ap.mouse.click(20, 400); wait_idle(ap, 500)
@@ -1338,7 +1332,7 @@ with sync_playwright() as p:
     xp.evaluate("(() => { const d = JSON.parse(localStorage.getItem('lifeplan.aiDaily')); d.runs = 0; localStorage.setItem('lifeplan.aiDaily', JSON.stringify(d)); })()")
     gem.ana_json = {'summary': '別の日の分析', 'insights': [], 'taskSuggestions': [{'title': '歯医者に電話する', 'quadrant': 'q1', 'why': '', 'steps': []}]}
     xp.reload(); wait_idle(xp, 500); xp.evaluate("location.hash = '#home'"); wait_idle(xp, 300)
-    xp.click('#anaCard [data-action=anaRerun]'); wait_js(xp, "LifePlan.state.aiSuggestions.length === 3", 8000); wait_idle(xp, 300)
+    xp.evaluate('LifePlan.runAnalysis()'); wait_js(xp, "LifePlan.state.aiSuggestions.length === 3", 8000); wait_idle(xp, 300)
     check('自動移動オフ：AI提案に並ぶだけ', S(xp, "LifePlan.state.items.filter(i => i.source === 'ai').length") == 0 and S(xp, "LifePlan.state.aiSuggestions.find(s => s.title === '歯医者に電話する').status") == 'open')
     gem.ana_json = ANA_JSON
     xc.close()
@@ -1356,8 +1350,9 @@ with sync_playwright() as p:
     check('コーチ：taskSuggestions は AI提案へ（自分のタスクには入らない）', len(cs) == 3 and S(pg, 'LifePlan.state.items.length') == nit and all(s['status'] == 'open' for s in cs))
     check('コーチ：id は決まった形（端末間で同じ）', all(s['id'].startswith('sug:coach:') for s in cs) and any(s['id'] == 'sug:coach:2026-11-02-t:0' for s in cs), [s['id'] for s in cs])
     check('コーチ：taskSuggestions だけのメッセージも受け取る', S(pg, "LifePlan.state.coachNotes.find(c => c.id === 'coach:2026-11-02-u').title") == 'タスクの提案')
-    check('コーチ：アドバイスに「AI提案に n件」', pg.locator('.coach-new').count() == 1 and 'AI提案に 2件' in pg.inner_text('.coach-new'))
-    pg.evaluate("document.querySelector('.coach-new').scrollIntoView({block: 'start'})"); wait_idle(pg, 200)
+    pg.evaluate("location.hash = '#coach'"); wait_idle(pg, 400)
+    check('コーチ：アドバイスに「AI提案に n件」', 'AI提案に 2件' in pg.inner_text('#main'))
+    pg.evaluate('window.scrollTo(0,0)'); wait_idle(pg, 200)
     shot(pg, 'v140_coach.png')
     pg.evaluate("LifePlan.syncNow()"); wait_idle(pg, 1500)
     check('コーチ：もう一度読んでも重複しない', S(pg, "LifePlan.state.aiSuggestions.filter(s => s.source === 'coach').length") == 3)
@@ -1397,7 +1392,11 @@ with sync_playwright() as p:
     card = cp.locator(f'.cd-card[data-cd="{c0["id"]}"]')
     check('カード：大きく「あと N 日」と曜日つきの日付', card.locator('.cd-num').inner_text().replace(',', '') == str(NB) and '2027年3月15日（月）' in card.inner_text())
     check('カード：関連タスクへのリンク', card.locator('a[href="#item/pp"]').count() == 1)
-    check('カード：進み具合のバー（作成日〜目標日）', card.locator('.cd-bar[role=progressbar]').get_attribute('aria-valuenow') == '0')
+    def grid_counts(sel):
+        return cp.evaluate(f"""() => {{ const g = document.querySelector('{sel} .cd-grid'); if (!g) return null;
+          return {{ total: g.querySelectorAll('.cd-dot').length, done: g.querySelectorAll('.cd-dot.done').length,
+            left: g.querySelectorAll('.cd-dot.left').length, goal: g.querySelectorAll('.cd-dot.goal').length, weekly: g.classList.contains('weekly') }}; }}""")
+    check('カード：ドットグリッド（作成日＝今日→経過1・残りNB-1・対象日1）', grid_counts(f'.cd-card[data-cd="{c0["id"]}"]') == {'total': NB + 1, 'done': 1, 'left': NB - 1, 'goal': 1, 'weekly': False}, grid_counts(f'.cd-card[data-cd="{c0["id"]}"]'))
     # 今日・過去・近い順・進み具合
     cds = S(cp, 'LifePlan.state.countdowns')
     cds += [{'id': 'cdtoday', 'title': '健康診断', 'emoji': '🏃', 'date': TD.isoformat(), 'createdAt': now, 'updatedAt': now},
@@ -1408,8 +1407,22 @@ with sync_playwright() as p:
     order = cp.evaluate("[...document.querySelectorAll('#main > .cd-card')].map(e => e.dataset.cd)")
     check('並び：近い順（今日 → 10日後 → 40日後 → 役員発表）', order == ['cdtoday', 'cdhalf', 'cdxmas', c0['id']], order)
     check('今日：「今日！」', '今日！' in cp.inner_text('.cd-card[data-cd=cdtoday]'))
-    check('進み具合：作成日から半分で 50%', cp.get_attribute('.cd-card[data-cd=cdhalf] .cd-bar', 'aria-valuenow') == '50')
+    check('グリッド：作成から半分のカウントダウン（経過11・残り9・対象日1）', grid_counts('.cd-card[data-cd=cdhalf]') == {'total': 21, 'done': 11, 'left': 9, 'goal': 1, 'weekly': False}, grid_counts('.cd-card[data-cd=cdhalf]'))
     check('過去：「N日経過」で「終わった予定」へ', cp.locator('.cd-past-wrap .cd-card[data-cd=cdpast]').count() == 1 and '5' in cp.locator('.cd-card[data-cd=cdpast] .cd-num').text_content() and '日経過' in cp.locator('.cd-card[data-cd=cdpast]').text_content() and '終わった予定（1件）' in cp.inner_text('.cd-past-wrap summary'))
+    # v1.8.1：ドットグリッド（当日・過去・不整合・週単位の境界）
+    check('グリッド：当日は対象日マスのみ', grid_counts('.cd-card[data-cd=cdtoday]') == {'total': 1, 'done': 0, 'left': 0, 'goal': 1, 'weekly': False}, grid_counts('.cd-card[data-cd=cdtoday]'))
+    check('グリッド：作成日が対象日より後でも壊れない（対象日マスのみ）', grid_counts('.cd-card[data-cd=cdpast]') == {'total': 1, 'done': 0, 'left': 0, 'goal': 1, 'weekly': False}, grid_counts('.cd-card[data-cd=cdpast]'))
+    cds2 = S(cp, 'LifePlan.state.countdowns')
+    def past_iso(d): return (datetime.datetime.combine(d, datetime.time(12)) - datetime.timedelta(hours=9)).isoformat() + 'Z'
+    cds2 += [{'id': 'cdpast2', 'title': '終わった旅行', 'emoji': '✈️', 'date': tdp(-5), 'createdAt': past_iso(TD - datetime.timedelta(days=15)), 'updatedAt': now},
+             {'id': 'cd210', 'title': '境界210日', 'emoji': '📅', 'date': tdp(104), 'createdAt': past_iso(TD - datetime.timedelta(days=105)), 'updatedAt': now},
+             {'id': 'cd211', 'title': '境界211日', 'emoji': '📅', 'date': tdp(105), 'createdAt': past_iso(TD - datetime.timedelta(days=105)), 'updatedAt': now},
+             {'id': 'cdlong', 'title': '長いカウントダウン', 'emoji': '🚀', 'date': tdp(150), 'createdAt': past_iso(TD - datetime.timedelta(days=100)), 'updatedAt': now}]
+    cp.evaluate(f"(() => {{ const s = JSON.parse(localStorage.getItem('lifeplan.v1')); s.countdowns = {json.dumps(cds2, ensure_ascii=False)}; localStorage.setItem('lifeplan.v1', JSON.stringify(s)); }})()"); cp.reload(); wait_idle(cp, 500)
+    check('グリッド：過去（全期間が経過）は全グレー＋対象日マス', grid_counts('.cd-card[data-cd=cdpast2]') == {'total': 11, 'done': 10, 'left': 0, 'goal': 1, 'weekly': False}, grid_counts('.cd-card[data-cd=cdpast2]'))
+    check('グリッド：総日数210は日単位のまま', grid_counts('.cd-card[data-cd=cd210]') == {'total': 210, 'done': 106, 'left': 103, 'goal': 1, 'weekly': False}, grid_counts('.cd-card[data-cd=cd210]'))
+    check('グリッド：総日数211で週単位に切替（31マス）', grid_counts('.cd-card[data-cd=cd211]') == {'total': 31, 'done': 15, 'left': 15, 'goal': 1, 'weekly': True}, grid_counts('.cd-card[data-cd=cd211]'))
+    check('グリッド：長いスパンも週単位（36マス・経過14週）', grid_counts('.cd-card[data-cd=cdlong]') == {'total': 36, 'done': 14, 'left': 21, 'goal': 1, 'weekly': True}, grid_counts('.cd-card[data-cd=cdlong]'))
     cp.evaluate('window.scrollTo(0,0)'); shot(cp, 'v150_countdown.png')
     # 編集（元に戻す）
     cp.click(f'.cd-card[data-cd="{c0["id"]}"] [data-action=cdEdit]'); wait_idle(cp, 300)
@@ -1423,12 +1436,10 @@ with sync_playwright() as p:
     check('削除', not S(cp, "LifePlan.state.countdowns.some(c => c.id === 'cdxmas')") and S(cp, "!!LifePlan.state.deleted['cdxmas']"))
     cp.click('#toast .toast-btn'); wait_idle(cp, 300)
     check('削除：元に戻せる', S(cp, "LifePlan.state.countdowns.some(c => c.id === 'cdxmas')") and cp.locator('.cd-card[data-cd=cdxmas]').count() == 1)
-    # ホーム：近い順に最大3件
-    cp.evaluate("location.hash = '#home'"); wait_idle(cp, 400)
-    rows = cp.locator('.cd-home .cd-mini li')
-    check('ホーム：近い3件をコンパクトに', rows.count() == 3 and '健康診断' in rows.nth(0).inner_text() and '今日！' in rows.nth(0).inner_text() and 'あと10日' in rows.nth(1).inner_text().replace('\n', '') and '役員発表' not in cp.inner_text('.cd-home'))
-    check('ホーム：画面へのリンク', cp.locator('.cd-home a[href="#countdown"]').count() >= 1)
-    cp.evaluate('window.scrollTo(0,0)'); shot(cp, 'v150_home.png')
+    # カウントダウンタブのカード（近い順・グリッドは上の検証済み）
+    cp.evaluate("location.hash = '#countdown'"); wait_idle(cp, 400)
+    check('カウントダウンタブ：未来分が全てカードで並ぶ', cp.locator('#main > .cd-card').count() == 7, cp.locator('#main > .cd-card').count())
+    cp.evaluate('window.scrollTo(0,0)'); shot(cp, 'v181_countdown_grid.png')
     # Gemini の分析の要約にも入る
     ctxt = cp.evaluate('LifePlan.analysisContext()')
     check('分析：カウントダウンも要約に入れる', '## カウントダウン' in ctxt and '役員発表：2027-03-15' in ctxt and f'あと{NB}日' in ctxt and 'TOEIC' not in ctxt, ctxt[:300])
@@ -1518,12 +1529,7 @@ with sync_playwright() as p:
     gh.set('data/calendar-links.json', json.dumps(links, ensure_ascii=False)); gh.set('data/calendar.json', json.dumps(calj, ensure_ascii=False))
     pg.evaluate('LifePlan.syncNow()'); wait_js(pg, "LifePlan.state.gcalDeletes.length === 0", 8000)
     check('削除済みが届くと依頼を片付ける', S(pg, 'LifePlan.state.gcalDeletes.length') == 0 and S(pg, "!!LifePlan.state.deleted['gdel:ev_mine']"))
-    # ホーム：これからの予定（7日間）
-    pg.evaluate("location.hash = '#home'"); wait_idle(pg, 400)
-    sh = pg.inner_text('.sched-home')
-    check('ホーム：これからの予定（7日以内のみ）', pg.locator('.sched-home .sched-row').count() == 3 and '歯医者' in sh and '10:30' in sh and '明日' in sh and '1on1' in sh and '母の誕生日' in sh and '終日' in sh and '株主総会' not in sh and 'マラソン' not in sh)
-    check('ホーム：⏳ の予定はカウントダウンに', 'マラソン大会' in pg.inner_text('.cd-home'))
-    pg.evaluate("location.hash = '#home'"); wait_idle(pg, 200)
+    # （v1.8.1：ホーム廃止に伴い、ホームの「これからの予定」「カウントダウン mini」カードは廃止。予定はカレンダータブ、⏳はカウントダウンタブで検証）
     # ── v1.6.0：Googleカレンダー直接連携（トークンを端末に持つ状態を再現）──
     gcal_fake.events['gev_seed'] = {'id': 'gev_seed', 'summary': '⏳ 直接連携の大会', 'start': {'date': tdp(40)}, 'end': {'date': tdp(41)}, 'location': '競技場'}
     gcal_fake.events['gev_meet'] = {'id': 'gev_meet', 'summary': '直接連携の面談', 'start': {'dateTime': f'{tdp(2)}T13:00:00+09:00'}, 'end': {'dateTime': f'{tdp(2)}T13:30:00+09:00'}}
@@ -1637,15 +1643,22 @@ with sync_playwright() as p:
     import urllib.parse as uparse
     for n_, hh in enumerate(['09:00', '10:00', '11:00', '12:00']):
         gcal_fake.events[f'chip_{n_}'] = {'id': f'chip_{n_}', 'summary': f'チップ{n_}', 'start': {'dateTime': f'{tdp(2)}T{hh}:00+09:00'}, 'end': {'dateTime': f'{tdp(2)}T{hh}:30:00+09:00'}}
+    # v1.8.1：タイムライン検証用（重なる予定・終日・長いタイトル）
+    gcal_fake.events['ovl_1'] = {'id': 'ovl_1', 'calendarId': 'work', 'summary': '重なる会議', 'start': {'dateTime': f'{TD.isoformat()}T10:30:00+09:00'}, 'end': {'dateTime': f'{TD.isoformat()}T11:30:00+09:00'}}
+    gcal_fake.events['aday_1'] = {'id': 'aday_1', 'calendarId': 'work', 'summary': '終日の出張', 'start': {'date': TD.isoformat()}, 'end': {'date': tdp(1)}}
+    gcal_fake.events['long_1'] = {'id': 'long_1', 'summary': 'HBU全体水曜会議・阪急阪神ホールディングス定例報告会・長いタイトル', 'start': {'dateTime': f'{tdp(5)}T09:00:00+09:00'}, 'end': {'dateTime': f'{tdp(5)}T09:30:00+09:00'}}
     pg.evaluate('LifePlan.pullCalendar()'); wait_js(pg, "LifePlan.calendar.calendar && LifePlan.calendar.calendar.events.some(e => e.id === 'chip_3')", 8000); wait_idle(pg, 300)
     pg.evaluate("location.hash = '#calendar'"); wait_idle(pg, 600)
     check('v1.8.0：既定は月表示・月曜始まり', pg.locator('.gtab-grid .gtab-cell').count() == 42 and pg.eval_on_selector('.gtab-grid.dow span >> nth=0', 'e => e.textContent') == '月' and pg.eval_on_selector('.gtab-grid.dow span >> nth=6', 'e => e.textContent') == '日' and pg.get_attribute('[data-action=gtabView][data-v=month]', 'aria-pressed') == 'true')
     cell2 = pg.locator(f'.gtab-cell[data-date="{tdp(2)}"]')
     check('v1.8.0：月セルはチップ最大3件＋「他N件」（その日5件）', cell2.locator('.gtab-chip').count() == 3 and '他2件' in cell2.inner_text() and 'チップ0' in cell2.inner_text(), cell2.inner_text())
-    # 週表示：7日分のブロック＋その週の予定が全件リストで出る
+    # 週表示：リストではなくタイムグリッド（v1.8.1。7列・曜日/日付ヘッダー・終日の帯・時間ブロック）
     pg.click('[data-action=gtabView][data-v=week]'); wait_idle(pg, 500)
-    check('v1.8.0：週表示は7日分のブロック', pg.locator('.gtab-wday').count() == 7 and '〜' in pg.inner_text('.gtab-nav h2'), pg.inner_text('.gtab-nav h2'))
-    check('v1.8.0：週表示に今日の予定（仕事の会議）が出る', '仕事の会議' in pg.inner_text('.gtab-week'))
+    check('v1.8.1：週表示はタイムグリッド（7列・7見出し）', pg.locator('.gtab-tg.week .gtab-tg-col').count() == 7 and pg.locator('.gtab-tg.week .gtab-tg-head').count() == 7 and '〜' in pg.inner_text('.gtab-nav h2'), pg.inner_text('.gtab-nav h2'))
+    check('v1.8.1：週表示に今日の予定（仕事の会議）の時間ブロックと終日の帯', pg.locator('.gtab-tg.week .gtab-tgev[data-eid="wev_1"]').count() == 1 and pg.locator('.gtab-tg.week .gtab-tg-ad[data-eid="aday_1"]').count() == 1)
+    pg.click('[data-action=gtabNav][data-dir="1"]'); wait_idle(pg, 500)
+    check('v1.8.1：週タイムグリッドの初期スクロールは8時付近（今日を含まない週）', abs(pg.eval_on_selector('.gtab-tg-scroll', 'e => e.scrollTop') - 380) <= 2, pg.eval_on_selector('.gtab-tg-scroll', 'e => e.scrollTop'))
+    pg.click('[data-action=gtabNav][data-dir="-1"]'); wait_idle(pg, 500)
     # 日表示：タイトル形式と前へ／次への単位連動
     pg.click('[data-action=gtabView][data-v=day]'); wait_idle(pg, 500)
     check('v1.8.0：日表示のタイトルは「M月D日（曜）」', pg.inner_text('.gtab-nav h2') == f'{TD.month}月{TD.day}日（{"日月火水木金土"[(TD.weekday() + 1) % 7]}）', pg.inner_text('.gtab-nav h2'))
@@ -1653,6 +1666,27 @@ with sync_playwright() as p:
     nd = TD + datetime.timedelta(days=1)
     check('v1.8.0：日表示の「次へ」は翌日', pg.inner_text('.gtab-nav h2') == f'{nd.month}月{nd.day}日（{"日月火水木金土"[(nd.weekday() + 1) % 7]}）', pg.inner_text('.gtab-nav h2'))
     pg.click('[data-action=gtabNav][data-dir="-1"]'); wait_idle(pg, 400)
+    # v1.8.1：日表示はタイムライン（終日の帯＋時刻に比例したブロック＋重なりの横並び＋タップで詳細）
+    tg = pg.evaluate("""() => { const b = document.querySelector('.gtab-tgev[data-eid="wev_1"]'); const o = document.querySelector('.gtab-tgev[data-eid="ovl_1"]');
+      return { tg: !!document.querySelector('.gtab-tg.day'), ads: [...document.querySelectorAll('.gtab-tg-ad')].map(e => e.textContent),
+        top: b ? parseFloat(b.style.top) : null, h: b ? parseFloat(b.style.height) : null,
+        bl: b ? parseFloat(b.style.left) : null, ol: o ? parseFloat(o.style.left) : null, ow: o ? parseFloat(o.style.width) : null }; }""")
+    check('v1.8.1：日表示はタイムライン＋終日の帯', tg['tg'] and any('終日の出張' in t for t in tg['ads']), tg)
+    check('v1.8.1：時間ブロックは時刻に比例（10:00の会議 top=480・高さ46）', tg['top'] == 480 and tg['h'] == 46, tg)
+    check('v1.8.1：重なる予定は横並び（幅50%・左50%）', tg['bl'] == 0 and tg['ol'] == 50 and tg['ow'] == 50, tg)
+    pg.click('.gtab-tgev[data-eid="wev_1"]'); wait_idle(pg, 400)
+    check('v1.8.1：タイムラインのブロックタップで詳細が開く', pg.locator('form[data-form=gcalEvent]').count() == 1)
+    pg.click('#modal [data-action=closeModal]'); wait_idle(pg, 300)
+    # 週見出しタップ → その日の日タイムライン／週の列ダブルタップでも日表示へ
+    pg.click('[data-action=gtabView][data-v=week]'); wait_idle(pg, 500)
+    pg.click(f'.gtab-tg-head[data-date="{tdp(1)}"]'); wait_idle(pg, 500)
+    nd1 = TD + datetime.timedelta(days=1)
+    check('v1.8.1：週見出しタップでその日の日タイムラインへ', pg.locator('.gtab-tg.day').count() == 1 and pg.inner_text('.gtab-nav h2') == f'{nd1.month}月{nd1.day}日（{"日月火水木金土"[(nd1.weekday() + 1) % 7]}）', pg.inner_text('.gtab-nav h2'))
+    pg.click('[data-action=gtabView][data-v=week]'); wait_idle(pg, 500)
+    pg.eval_on_selector(f'.gtab-tg-col[data-date="{tdp(2)}"]', 'el => { el.dispatchEvent(new MouseEvent("click", { bubbles: true })); el.dispatchEvent(new MouseEvent("click", { bubbles: true })); }')
+    wait_idle(pg, 500)
+    nd2 = TD + datetime.timedelta(days=2)
+    check('v1.8.1：週の列ダブルタップでその日の日表示へ', pg.locator('.gtab-tg.day').count() == 1 and pg.inner_text('.gtab-nav h2').startswith(f'{nd2.month}月{nd2.day}日'), pg.inner_text('.gtab-nav h2'))
     # 月表示：前へ／次へ／今日の単位連動
     pg.click('[data-action=gtabView][data-v=month]'); wait_idle(pg, 500)
     pg.click('[data-action=gtabNav][data-dir="-1"]'); wait_idle(pg, 400)
@@ -1701,6 +1735,41 @@ with sync_playwright() as p:
     check('v1.8.0：縦スワイプでは移動しない', pg.inner_text('.gtab-nav h2') == f'{nm.year}年{nm.month}月', pg.inner_text('.gtab-nav h2'))
     gswipe(120, 0)
     check('v1.8.0：右スワイプで前月へ戻る', pg.inner_text('.gtab-nav h2') == f'{TD.year}年{TD.month}月', pg.inner_text('.gtab-nav h2'))
+    # v1.8.1：実タッチドラッグ（CDP）でも期間が移動し、残留ずれ・横スクロール・ドロワーの誤作動が無いこと
+    cdp = ctx.new_cdp_session(pg)
+    def cdrag(x0, y0, x1, y1, steps=10):
+        cdp.send('Input.dispatchTouchEvent', {'type': 'touchStart', 'touchPoints': [{'x': x0, 'y': y0}]})
+        for k in range(1, steps + 1):
+            cdp.send('Input.dispatchTouchEvent', {'type': 'touchMove', 'touchPoints': [{'x': x0 + (x1 - x0) * k / steps, 'y': y0 + (y1 - y0) * k / steps}]}); pg.wait_for_timeout(14)
+        cdp.send('Input.dispatchTouchEvent', {'type': 'touchEnd', 'touchPoints': []}); pg.wait_for_timeout(700)
+    def drag_state():
+        return pg.evaluate("""() => ({ sx: window.scrollX, cls: document.body.className, dinl: document.getElementById('drawer').style.transform,
+          mtf: getComputedStyle(document.querySelector('.main')).transform, ttf: getComputedStyle(document.querySelector('.topbar')).transform,
+          title: document.querySelector('.gtab-nav h2').textContent })""")
+    gbox = pg.locator('.gtab-grid').nth(1).bounding_box(); gy = gbox['y'] + 100
+    cdrag(320, gy, 70, gy + 3)
+    st = drag_state()
+    check('v1.8.1：左スワイプ（実タッチ）で翌月・残留ずれなし・ドロワー閉', st['title'] == f'{nm.year}年{nm.month}月' and st['sx'] == 0 and st['dinl'] == '' and 'drawer' not in st['cls'] and st['mtf'] == 'none' and st['ttf'] == 'none', st)
+    cdrag(70, gy, 320, gy + 3)
+    st = drag_state()
+    check('v1.8.1：右スワイプ（実タッチ）で前月・残留ずれなし', st['title'] == f'{TD.year}年{TD.month}月' and st['sx'] == 0 and st['dinl'] == '' and 'drawer' not in st['cls'], st)
+    cdrag(200, gy, 206, gy + 240)
+    st = drag_state()
+    check('v1.8.1：縦ドラッグ（実タッチ）では期間は動かない', st['title'] == f'{TD.year}年{TD.month}月', st)
+    # 長い予定名でもグリッドが画面幅を超えない（iOS でグリッド膨張→文書が横パンして固まった不具合の回帰防止）
+    ov = pg.evaluate("""() => { const gr = document.querySelectorAll('.gtab-grid')[1]; const cells = document.querySelectorAll('.gtab-cell');
+      return { sw: document.documentElement.scrollWidth, iw: window.innerWidth, gw: gr.getBoundingClientRect().width,
+        lastR: cells[cells.length - 1].getBoundingClientRect().right }; }""")
+    check('v1.8.1：長い予定名でも横にはみ出さない', ov['sw'] <= ov['iw'] and ov['lastR'] <= ov['iw'] + 1 and ov['gw'] < ov['iw'], ov)
+    # v1.8.1：月セルのダブルタップでその日の日タイムラインへ（シングルタップは選択のみ）
+    pg.click(f'.gtab-cell[data-date="{tdp(3)}"]'); wait_idle(pg, 500)
+    check('v1.8.1：月セルのシングルタップは選択のみ（月表示のまま）', pg.locator('.gtab-tg.day').count() == 0 and pg.locator(f'.gtab-cell[data-date="{tdp(3)}"].sel').count() == 1)
+    pg.click(f'.gtab-cell[data-date="{tdp(4)}"]'); wait_idle(pg, 120)
+    pg.click(f'.gtab-cell[data-date="{tdp(4)}"]'); wait_idle(pg, 500)
+    nd4 = TD + datetime.timedelta(days=4)
+    check('v1.8.1：月セルのダブルタップでその日の日タイムラインへ', pg.locator('.gtab-tg.day').count() == 1 and pg.inner_text('.gtab-nav h2').startswith(f'{nd4.month}月{nd4.day}日'), pg.inner_text('.gtab-nav h2'))
+    pg.click('[data-action=gtabView][data-v=month]'); wait_idle(pg, 400)
+    pg.click('[data-action=gtabNav][data-dir="0"]'); wait_idle(pg, 400)
     shot(pg, 'v180_calendar.png')
     pg.evaluate("localStorage.removeItem('lifeplan.gcal')")
     # ── v1.7.0：TASK画面（全件表示・折りたたみ）とナビ再編 ──
@@ -1752,7 +1821,7 @@ with sync_playwright() as p:
     check('TASK：削除ボタンで行が消える', tp.locator('.task-row[data-task-row="tk2"]').count() == 0)
     check('TASK：スワイプ削除でアイテム削除＋tombstone 記録', tp.evaluate("!LifePlan.state.items.some(i => i.id === 'tk2') && !!LifePlan.state.deleted['tk2']"))
     navs = tp.evaluate("[...document.querySelectorAll('.tabbar a[data-nav]')].filter(a => a.offsetParent).map(a => a.dataset.nav)")
-    check('ナビ：下部タブは5つ（ホーム/マトリクス/TASK/カウントダウン/カレンダー）', navs == ['home', 'matrix', 'wish', 'countdown', 'calendar'], navs)
+    check('ナビ：下部タブは5つ（週間スタンプ/マトリクス/TASK/カウントダウン/カレンダー）', navs == ['habits', 'matrix', 'wish', 'countdown', 'calendar'], navs)
     check('ナビ：タブに未整理が無い・ジャーナルはモバイルタブに出ない', tp.locator('.tabbar a[data-nav=inbox]').count() == 0 and tp.evaluate("[...document.querySelectorAll('.tabbar a[data-nav=journal]')].filter(a => a.offsetParent).length") == 0)
     check('ナビ：メニューに習い事・後回し・未整理・カウントダウンが出ない', tp.locator('#drawer a[data-nav=lessons]').count() == 0 and tp.locator('#drawer a[data-nav=later]').count() == 0 and tp.locator('#drawer a[data-nav=inbox]').count() == 0 and tp.locator('#drawer a[data-nav=countdown]').count() == 0)
     check('ナビ：メニューにジャーナルとカレンダーは残る', tp.locator('#drawer a[data-nav=journal]').count() == 1 and tp.locator('#drawer a[data-nav=calendar]').count() == 1)
@@ -1793,7 +1862,7 @@ with sync_playwright() as p:
     kp.select_option('select[data-change=wishFilter][data-k=cat]', ''); wait_idle(kp, 400)
     # 編集フォームのカテゴリも2択（「なし」は無い）
     kp.evaluate("location.hash = '#item/k_p1'"); wait_idle(kp, 400)
-    kp.click('[data-action=editItem]'); wait_idle(kp, 400)
+    kp.click('.detail-top [data-action=editItem]'); wait_idle(kp, 400)
     edopts = kp.eval_on_selector_all('form[data-form=item] select[name=category] option', 'els => els.map(e => e.value)')
     check('v1.8.0：編集フォームのカテゴリは2択のみ', edopts == ['プライベート', '仕事'] and kp.input_value('form[data-form=item] select[name=category]') == 'プライベート', edopts)
     kp.click('#modal [data-action=closeModal]'); wait_idle(kp, 300)
@@ -1830,13 +1899,116 @@ with sync_playwright() as p:
     mp.evaluate("location.hash = '#matrix'"); wait_idle(mp, 600)
     check('v1.8.0：マトリクスでは大見出しと説明を出さない', mp.locator('#main .view-head').count() == 0 and '緊急度 × 重要度で整理' not in mp.inner_text('#main'))
     check('v1.8.0：マトリクス表示中だけ route-matrix クラス', mp.evaluate("document.body.classList.contains('route-matrix')") is True)
-    check('v1.8.0：種別フィルターチップと軸ラベル・象限は残る', mp.locator('.seg-scroll .pill').count() == 5 and '重要' in mp.inner_text('.axis-top') and '緊急' in mp.inner_text('.axis-side') and mp.locator('.quad').count() == 4)
+    check('v1.8.1：マトリクスのチップはカテゴリ3つ（すべて/仕事/プライベート）・軸ラベル・象限は残る', mp.locator('.seg-scroll .pill').count() == 3 and [mp.locator('.seg-scroll .pill').nth(i).inner_text() for i in range(3)] == ['すべて', '仕事', 'プライベート'] and '重要' in mp.inner_text('.axis-top') and '緊急' in mp.inner_text('.axis-side') and mp.locator('.quad').count() == 4)
     wrap = mp.locator('.matrix-wrap').bounding_box(); tab = mp.locator('.tabbar').bounding_box()
     check('v1.8.0：グリッドがタブバーの上まで広がる', wrap and tab and wrap['height'] > 550 and abs((wrap['y'] + wrap['height']) - tab['y']) < 30, wrap)
     check('v1.8.0：象限が溢れてもページ全体はスクロールしない（象限内スクロール）', mp.evaluate("getComputedStyle(document.querySelector('.quad-body')).overflowY") == 'auto' and mp.evaluate("document.documentElement.scrollHeight <= window.innerHeight + 1"), mp.evaluate("document.documentElement.scrollHeight"))
     mp.evaluate("location.hash = '#wish'"); wait_idle(mp, 400)
     check('v1.8.0：他ビューでは見出しを出し、route-matrix も外れる', mp.locator('#main .view-head').count() >= 1 and mp.evaluate("document.body.classList.contains('route-matrix')") is False)
     mc.close()
+    # ── v1.8.1：マトリクスのカテゴリ切り替え（すべて/仕事/プライベート）──
+    cc = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2, locale='ja-JP', timezone_id='Asia/Tokyo', service_workers='block')
+    cp = cc.new_page(); cp.on('pageerror', lambda e: errors.append('MCAT ' + str(e)))
+    cseed = {'items': [
+        {'id': 'cw1', 'list': 'task', 'title': 'カテゴリ：仕事1', 'category': '仕事', 'quadrant': 'q1', 'status': 'todo', 'createdAt': now, 'updatedAt': now},
+        {'id': 'cw2', 'list': 'wish', 'title': 'カテゴリ：仕事2', 'category': '仕事', 'quadrant': 'q1', 'status': 'todo', 'createdAt': now, 'updatedAt': now},
+        {'id': 'cp1', 'list': 'task', 'title': 'カテゴリ：私1', 'category': 'プライベート', 'quadrant': 'q1', 'status': 'todo', 'createdAt': now, 'updatedAt': now},
+        {'id': 'cp2', 'list': 'later', 'title': 'カテゴリ：私2', 'category': 'プライベート', 'quadrant': 'q2', 'status': 'todo', 'createdAt': now, 'updatedAt': now},
+        {'id': 'cuw', 'list': 'inbox', 'title': 'カテゴリ：未分類の仕事', 'category': '仕事', 'status': 'todo', 'createdAt': now, 'updatedAt': now},
+        {'id': 'cup', 'list': 'inbox', 'title': 'カテゴリ：未分類の私', 'category': 'プライベート', 'status': 'todo', 'createdAt': now, 'updatedAt': now}],
+        'journal': [], 'habits': [], 'lessons': []}
+    cp.goto(URL); wait_idle(cp, 400)
+    cp.evaluate(f"localStorage.setItem('lifeplan.v1', JSON.stringify({json.dumps(cseed, ensure_ascii=False)}))")
+    cp.reload(); wait_idle(cp, 500)
+    cp.evaluate("location.hash = '#matrix'"); wait_idle(cp, 500)
+    def mids():
+        return sorted(cp.evaluate("[...document.querySelectorAll('.card.item')].map(e => e.dataset.id)"))
+    def qcount(q):
+        return cp.inner_text(f'.quad.{q} .count')
+    check('v1.8.1：マトリクス初期表示は全件（象限4＋未分類2）', mids() == ['cp1', 'cp2', 'cup', 'cuw', 'cw1', 'cw2'] and qcount('q1') == '3', mids())
+    cp.click('.seg-scroll .pill[data-v="仕事"]'); wait_idle(cp, 400)
+    check('v1.8.1：仕事を選ぶと仕事カテゴリのみ（象限・未分類トレイとも）', mids() == ['cuw', 'cw1', 'cw2'] and qcount('q1') == '2' and cp.inner_text('.tray .count') == '1', mids())
+    cp.click('.seg-scroll .pill[data-v="プライベート"]'); wait_idle(cp, 400)
+    check('v1.8.1：プライベートを選ぶとプライベートのみ', mids() == ['cp1', 'cp2', 'cup'] and qcount('q1') == '1' and qcount('q2') == '1' and cp.inner_text('.tray .count') == '1', mids())
+    cp.click('.seg-scroll .pill[data-v="all"]'); wait_idle(cp, 400)
+    check('v1.8.1：すべてで全件に戻る', mids() == ['cp1', 'cp2', 'cup', 'cuw', 'cw1', 'cw2'] and qcount('q1') == '3', mids())
+    cc.close()
+    # ── v1.8.2：詳細カード下部の accessory 行／目安時間／進捗%／カテゴリ初期値／マトリクスの長押しドラッグ ──
+    mc2 = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2, locale='ja-JP', timezone_id='Asia/Tokyo',
+                              user_agent='Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+                              has_touch=True, is_mobile=True, service_workers='block')
+    mp2 = mc2.new_page(); mp2.on('pageerror', lambda e: errors.append('M182 ' + str(e)))
+    seed182 = {'items': [
+        {'id': 'm1', 'list': 'task', 'title': 'ドラッグ元タスク', 'quadrant': 'q1', 'category': '仕事', 'estimate': 30, 'status': 'todo',
+         'steps': [{'id': 's1', 'text': 'a', 'done': True}, {'id': 's2', 'text': 'b', 'done': False}, {'id': 's3', 'text': 'c', 'done': False}, {'id': 's4', 'text': 'd', 'done': False}], 'createdAt': now, 'updatedAt': now},
+        {'id': 'm2', 'list': 'task', 'title': '未分類タスク', 'quadrant': '', 'category': 'プライベート', 'status': 'todo', 'steps': [], 'createdAt': now, 'updatedAt': now},
+        {'id': 'm3', 'list': 'task', 'title': 'ステップなし', 'quadrant': 'q2', 'category': 'プライベート', 'status': 'todo', 'steps': [], 'createdAt': now, 'updatedAt': now}]}
+    mp2.goto(URL); wait_idle(mp2, 400)
+    mp2.evaluate(f"localStorage.setItem('lifeplan.v1', JSON.stringify({json.dumps(seed182, ensure_ascii=False)}))")
+    mp2.reload(); wait_idle(mp2, 500)
+    mp2.evaluate("location.hash = '#matrix'"); wait_idle(mp2, 500)
+    m1card = mp2.locator('.quad.q1 .card.item[data-id="m1"]')
+    check('v1.8.2：目安時間チップ（⏱ 30分）がマトリクスのカードに出る', '⏱ 30分' in m1card.inner_text())
+    check('v1.8.2：進捗バー＋%表示（ステップ1/4=25%）', '25%' in m1card.locator('.mini-steps').inner_text() and m1card.locator('.mini-steps .progress').count() == 1, m1card.locator('.mini-steps').inner_text())
+    check('v1.8.2：ステップ0件なら進捗は出ない', mp2.locator('.quad.q2 .card.item[data-id="m3"] .mini-steps').count() == 0)
+    mp2.evaluate("location.hash = '#wish'"); wait_idle(mp2, 400)
+    mp2.click('.task-row[data-task-row="m1"] > summary'); wait_idle(mp2, 400)
+    check('v1.8.2：TASK のカードにも目安時間と進捗%', '⏱ 30分' in mp2.inner_text('.task-row[data-task-row="m1"] .task-row-body') and '25%' in mp2.inner_text('.task-row[data-task-row="m1"] .task-row-body'))
+    mp2.evaluate("location.hash = '#item/m1'"); wait_idle(mp2, 400)
+    mp2.click('.detail-top [data-action=editItem]'); wait_idle(mp2, 400)
+    check('v1.8.2：編集フォームに目安時間チップ（なし＋6種）・保存値30分が選択中', mp2.locator('form[data-form=item] input[name=estimate]').count() == 7 and mp2.locator('form[data-form=item] input[name=estimate][value="30"]').is_checked())
+    check('v1.8.2：編集フォームのカテゴリは保存値（仕事）を表示', mp2.input_value('form[data-form=item] select[name=category]') == '仕事')
+    mp2.click('form[data-form=item] label.pill-radio:has(input[name=estimate][value="240"])'); wait_idle(mp2, 200)
+    mp2.click('form[data-form=item] button[type=submit]'); wait_idle(mp2, 400)
+    check('v1.8.2：目安時間＝半日（240分）で保存', S(mp2, "LifePlan.state.items.find(i => i.id === 'm1').estimate") == 240)
+    mp2.evaluate("location.hash = '#matrix'"); wait_idle(mp2, 400)
+    check('v1.8.2：カードに「⏱ 半日」チップ', '⏱ 半日' in mp2.inner_text('.quad.q1 .card.item[data-id="m1"]'))
+    mp2.evaluate("location.hash = '#habits'"); wait_idle(mp2, 400)
+    mp2.click('.fab'); wait_idle(mp2, 400)
+    check('v1.8.2：新規作成フォームのカテゴリ初期値はプライベート', mp2.input_value('form[data-form=quickAdd] select[name=category]') == 'プライベート')
+    mp2.click('#modal [data-action=closeModal]'); wait_idle(mp2, 300)
+    mp2.evaluate("location.hash = '#matrix'"); wait_idle(mp2, 500)
+    cdp2 = mc2.new_cdp_session(mp2)
+    def tstart(x, y): cdp2.send('Input.dispatchTouchEvent', {'type': 'touchStart', 'touchPoints': [{'x': x, 'y': y}]})
+    def tmove(x, y): cdp2.send('Input.dispatchTouchEvent', {'type': 'touchMove', 'touchPoints': [{'x': x, 'y': y}]})
+    def tend(): cdp2.send('Input.dispatchTouchEvent', {'type': 'touchEnd', 'touchPoints': []})
+    def center(loc):
+        bb = loc.bounding_box(); return bb['x'] + bb['width'] / 2, bb['y'] + bb['height'] / 2
+    cx, cy = center(mp2.locator('.quad.q1 .card.item[data-id="m1"]'))
+    tx, ty = center(mp2.locator('.quad.q3'))
+    tstart(cx, cy); mp2.wait_for_timeout(450)
+    ghost_ok = mp2.locator('.drag-ghost').count() == 1
+    for k in range(1, 13):
+        tmove(cx + (tx - cx) * k / 12, cy + (ty - cy) * k / 12); mp2.wait_for_timeout(30)
+    mp2.wait_for_timeout(150)
+    over_ok = mp2.evaluate("document.querySelector('.quad.q3').classList.contains('drop-over')")
+    tend(); mp2.wait_for_timeout(500)
+    check('v1.8.2：長押しでドラッグ開始（ゴースト＋ドロップ先ハイライト）', ghost_ok and over_ok)
+    check('v1.8.2：ドロップで象限が変わる（q1→q3）・詳細へ誤遷移しない', S(mp2, "LifePlan.state.items.find(i => i.id === 'm1').quadrant") == 'q3' and mp2.locator('.quad.q3 .card.item[data-id="m1"]').count() == 1 and S(mp2, 'location.hash') == '#matrix')
+    cx, cy = center(mp2.locator('.quad.q3 .card.item[data-id="m1"]'))
+    tx, ty = center(mp2.locator('.tray'))
+    tstart(cx, cy); mp2.wait_for_timeout(450)
+    for k in range(1, 13):
+        tmove(cx + (tx - cx) * k / 12, cy + (ty - cy) * k / 12); mp2.wait_for_timeout(30)
+    tend(); mp2.wait_for_timeout(500)
+    check('v1.8.2：未分類トレイへドロップで未分類に戻る', S(mp2, "LifePlan.state.items.find(i => i.id === 'm1').quadrant") == '' and mp2.locator('.tray .card.item[data-id="m1"]').count() == 1)
+    bb = mp2.locator('.tray .card.item[data-id="m2"]').bounding_box(); sx, sy = bb['x'] + bb['width'] / 2, bb['y'] + 10
+    tstart(sx, sy)
+    for k in range(1, 7):
+        tmove(sx, sy - k * 18); mp2.wait_for_timeout(16)
+    tend(); mp2.wait_for_timeout(400)
+    check('v1.8.2：長押しなしのスワイプではドラッグしない（スクロール優先）', mp2.locator('.drag-ghost').count() == 0 and S(mp2, "LifePlan.state.items.find(i => i.id === 'm2').quadrant") == '')
+    mp2.evaluate("location.hash = '#item/m3'"); wait_idle(mp2, 400)
+    acc = mp2.locator('.card.detail .detail-actions')
+    check('v1.8.2：詳細カード下部に accessory 行（ステップ追加/編集/完了）', acc.locator('button').count() == 3 and 'ステップ追加' in acc.inner_text() and '完了にする' in acc.inner_text())
+    acc.locator('[data-action=focusStepAdd]').click(); wait_idle(mp2, 800)
+    check('v1.8.2：accessory「ステップ追加」で入力欄にフォーカス', mp2.evaluate("document.activeElement && document.activeElement.getAttribute('aria-label')") == 'ステップを追加')
+    acc.locator('[data-action=editItem]').click(); wait_idle(mp2, 400)
+    check('v1.8.2：accessory「編集」で編集フォームが開く', mp2.locator('form[data-form=item]').count() == 1)
+    mp2.click('#modal [data-action=closeModal]'); wait_idle(mp2, 300)
+    acc.locator('[data-action=toggleDone]').click(); wait_idle(mp2, 400)
+    check('v1.8.2：accessory「完了にする」が効く（ラベルも切り替わる）', S(mp2, "LifePlan.state.items.find(i => i.id === 'm3').status") == 'done' and '未完了に戻す' in mp2.locator('.card.detail .detail-actions [data-action=toggleDone]').inner_text())
+    mc2.close()
     # ── PC ──
     state_dump = pg.evaluate("localStorage.getItem('lifeplan.v1')")
     # ── Service Worker・オフライン（別コンテキスト：同期のモックと分けるため）──
@@ -1862,7 +2034,7 @@ with sync_playwright() as p:
     nav = sp.evaluate("performance.getEntriesByType('navigation')[0].name")
     check('アップデート：?v=<時刻> で読み込み直す', re.search(r'[?&]v=\d{10,}', nav) is not None and sp.evaluate('window.__beforeUpdate') is None, nav)
     check('アップデート：古いキャッシュを削除', 'lifeplan-old-test' not in sp.evaluate('caches.keys()'))
-    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.8.0' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
+    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.8.2' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
     check('アップデート：Service Worker は引き続き有効', sp.evaluate("navigator.serviceWorker.getRegistration().then(r => !!(r && r.active))"))
     swc.set_offline(True)
     sp.reload(); wait_idle(sp, 1200)

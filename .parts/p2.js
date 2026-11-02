@@ -25,12 +25,14 @@
   function sectionHead(title, sub = '', right = '') {
     return `<div class="view-head"><div><h1>${VIEW_ICON[title] ? `<span class="h-ico" aria-hidden="true">${VIEW_ICON[title]}</span>` : ''}${esc(title)}</h1>${sub ? `<p class="sub">${sub}</p>` : ''}</div>${right}</div>`;
   }
+  const estLabel = (m) => (m === 240 ? '半日' : m === 480 ? '1日' : m % 60 === 0 ? `${m / 60}時間` : `${m}分`); // v1.8.2：目安時間の表示
   function itemChips(i, o = {}) {
     const c = [];
     if (o.showList) c.push(chip(LISTS[i.list], 'list'));
     if (i.source === 'ai') c.push(chip('🤖 AI提案から', 'ai-chip'));
     if (i.quadrant && !o.hideQuadrant) c.push(chip(QUADRANTS[i.quadrant].label, 'qchip ' + i.quadrant));
     if (i.category) c.push(chip(i.category, 'cat'));
+    if (i.estimate) c.push(chip('⏱ ' + estLabel(i.estimate), 'est'));
     if (i.list !== 'inbox' || i.importance !== 'mid') c.push(chip('重要度 ' + IMPORTANCE[i.importance], 'imp-' + i.importance));
     if (i.timeframe) c.push(chip(TIMEFRAME[i.timeframe], 'tf'));
     if (i.targetDate && i.status !== 'done') {
@@ -64,7 +66,7 @@
           ${ctx === 'matrix' ? actions : ''}<h3 class="item-title">${esc(i.title)}</h3>
           ${i.notes && ctx !== 'matrix' ? `<p class="item-notes">${esc(trunc(i.notes, 90))}</p>` : ''}
           ${itemChips(i, { showList, hideQuadrant: ctx === 'matrix' })}
-          ${total ? `<div class="mini-steps">${progressBar(done, total, 'thin')}<span>ステップ ${done}/${total}</span></div>` : ''}
+          ${total ? `<div class="mini-steps">${progressBar(done, total, 'thin')}<span>ステップ ${done}/${total}（${Math.round((done / total) * 100)}%）</span></div>` : ''}
         </div>
       </div>
       ${ctx !== 'matrix' && actions ? `<div class="item-actions">${actions}</div>` : ''}
@@ -83,173 +85,11 @@
     </article>`;
   }
 
-  // ───────────────────────── 画面: ホーム ─────────────────────────
-  function viewHome() {
-    const items = state.items;
-    const wish = items.filter((i) => i.list === 'wish');
-    const wishDone = wish.filter((i) => i.status === 'done').length;
-    const tasks = activeItems().filter((i) => i.list === 'task');
-    const later = activeItems().filter((i) => i.list === 'later');
-    const inbox = activeItems().filter((i) => i.list === 'inbox');
-    const activeLessons = state.lessons.filter((l) => l.status === 'active');
-    const isEmpty = !items.length && !state.lessons.length && !state.journal.length;
-    const out = [];
-    const d = new Date();
-    const hr = d.getHours();
-    const greet = hr < 5 ? 'こんばんは' : hr < 11 ? 'おはようございます' : hr < 18 ? 'こんにちは' : 'こんばんは';
-    const nStuck = activeItems().filter(isStuck).length;
-    out.push(`<section class="hero" aria-label="ホーム">
-      <div class="hero-in">
-        <img class="avatar hero-avatar" src="images/avatar-256.png" alt="" width="72" height="72">
-        <div class="grow"><p class="hero-date">${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日（${'日月火水木金土'[d.getDay()]}）</p>
-          <h1 class="hero-title">${greet}</h1>
-          <p class="hero-sub">${isEmpty ? 'やりたい事を、一歩ずつ。' : `未完了のタスク ${tasks.length}件${nStuck ? `・停滞 ${nStuck}件` : ''}・やりたい事 ${wish.length - wishDone}件`}</p></div>
-      </div>
-      <div class="hero-links"><a class="hero-pill" href="#ai">🤖 AIに相談</a><a class="hero-pill" href="#habits">🐣 スタンプ</a><a class="hero-pill" href="#matrix">🧭 マトリクス</a><a class="hero-pill" href="#journal">📔 今日を書く</a></div>
-    </section>`);
-
-    // コーチからの新着アドバイス（いちばん目立つ場所に）
-    const unread = sortedCoach().filter((c) => !c.read);
-    if (unread.length) {
-      out.push(`<section class="card coach-new">
-        <div class="card-head"><h2>💬 コーチからの新着アドバイス <span class="count new">${unread.length}</span></h2>${unread.length > 1 ? '<button class="btn small soft" data-action="markAllRead">すべて既読</button>' : ''}</div>
-        ${unread.slice(0, 3).map((c) => adviceCard(c, true)).join('')}
-        ${unread.length > 3 ? `<a class="link" href="#coach">ほか ${unread.length - 3} 件を見る</a>` : ''}
-      </section>`);
-    }
-
-    // ✨ 今日の分析（Gemini）
-    out.push(homeCountdownCard());
-    out.push(homeScheduleCard());
-    out.push(homeAnalysisCard());
-
-    if (isEmpty) {
-      out.push(`<section class="card welcome">
-        <h2>ようこそ 🌿</h2>
-        <p>やりたい事、後回しでいい事、習い事、日々のタスクをひとつにまとめる自分専用のノートです。データはこの端末のブラウザの中（と、設定すればあなたの GitHub リポジトリ）だけに保存されます。</p>
-        <p class="muted">まずは右下の「＋」から思いついたことを書いてみましょう。使い方を見たいときはサンプルを追加できます（あとから削除できます）。</p>
-        <div class="btn-row">
-          <button class="btn primary" data-action="quickAdd">＋ 追加する</button>
-          <button class="btn soft" data-action="addSamples">サンプルを追加</button>
-          <button class="btn soft" data-action="addMemoSamples">サンプルを追加（手書きメモから）</button>
-        </div>
-      </section>`);
-    }
-    if (!sync.connected) {
-      out.push(`<a class="card hint-card" href="#settings/sync"><b>🔗 AIコーチと自動でつなぐ</b><span class="muted small">設定でトークンを1回貼るだけ。以後は自動で保存・読み込みされ、コーチのアドバイスもここに届きます。</span></a>`);
-    }
-
-    // 習慣スタンプ（今日のスタンプとぽむ）
-    if (state.habits.length || !isEmpty) { checkPomuChanges(); out.push(homeHabitsCard()); }
-
-    // 今年のフォーカス
-    const focus = state.focus[thisYear()] || '';
-    out.push(`<section class="card focus" data-action="editFocus" role="button" tabindex="0">
-      <div class="label">${thisYear()}年のフォーカス</div>
-      ${focus ? `<p class="focus-text">${esc(focus)}</p>` : '<p class="muted">タップして今年いちばん大事にしたいことを書く</p>'}
-    </section>`);
-
-    // AIに相談（Gemini）
-    out.push(`<a class="card ai-entry" href="#ai"><span class="ai-emoji" aria-hidden="true">🤖</span><span class="grow"><b>AIに相談（Gemini）</b><span class="muted small">今週何から？ 停滞の原因は？ その場でコーチに聞けます</span></span><span class="chev" aria-hidden="true">›</span></a>`);
-
-    // 数字
-    out.push(`<section class="stats">
-      <a class="stat" href="#matrix"><span class="n">${tasks.length}</span><span class="l">タスク</span></a>
-      <a class="stat" href="#wish"><span class="n">${wish.length - wishDone}<small>/${wish.length}</small></span><span class="l">やりたい事</span></a>
-      <a class="stat" href="#later"><span class="n">${later.length}</span><span class="l">後回し</span></a>
-      <a class="stat" href="#inbox"><span class="n">${inbox.length}</span><span class="l">未整理</span></a>
-      <a class="stat" href="#lessons"><span class="n">${activeLessons.length}</span><span class="l">習い事 ${fmtYen(activeLessonCost())}/月</span></a>
-    </section>`);
-
-    // マトリックスの概要
-    const act = activeItems();
-    if (act.some((i) => i.quadrant)) {
-      out.push(`<section class="card">
-        <div class="card-head"><h2>マトリックス</h2><a class="link" href="#matrix">開く</a></div>
-        <div class="mini-matrix">${QUADRANT_LAYOUT.map((q) => {
-          const list = act.filter((i) => i.quadrant === q);
-          return `<a href="#matrix" class="mm ${q}"><b>${list.length}</b><span>${QUADRANTS[q].label}</span><em>${list.slice(0, 2).map((i) => esc(trunc(i.title, 12))).join('・')}</em></a>`;
-        }).join('')}</div>
-      </section>`);
-    }
-
-    // 停滞
-    const stuck = act.filter(isStuck).sort((a, b) => idleDays(b) - idleDays(a));
-    if (stuck.length) {
-      out.push(`<section class="card">
-        <div class="card-head"><h2>ずっとできていない事 <span class="count stuck">${stuck.length}</span></h2></div>
-        <p class="muted small">${STUCK_DAYS}日以上進んでいない項目です。理由を書くと次の一歩が見つけやすくなります。</p>
-        <ul class="plain-list">${stuck.slice(0, 6).map((i) => `<li class="stuck-row">
-          <div class="grow" data-action="openItem" data-id="${i.id}" role="button" tabindex="0"><b>${esc(i.title)}</b>
-            <div class="muted small">${idleDays(i)}日進捗なし・作成から${daysSince(i.createdAt)}日${i.stuck.tags.length ? '・理由: ' + esc(i.stuck.tags.join('、')) : ''}</div></div>
-          <button class="btn small soft" data-action="stuckReason" data-id="${i.id}">${i.stuck.tags.length || i.stuck.text ? '理由を編集' : '理由を記録'}</button>
-        </li>`).join('')}</ul>
-        ${stuck.length > 6 ? `<p class="muted small">ほか ${stuck.length - 6} 件</p>` : ''}
-      </section>`);
-    }
-
-    // 期限が近い
-    const soon = act.filter((i) => i.targetDate && daysUntil(i.targetDate) <= 30).sort((a, b) => a.targetDate.localeCompare(b.targetDate));
-    const soonSteps = [];
-    act.forEach((i) => i.steps.forEach((s) => { if (!s.done && s.due && daysUntil(s.due) <= 14) soonSteps.push({ i, s }); }));
-    if (soon.length || soonSteps.length) {
-      out.push(`<section class="card">
-        <div class="card-head"><h2>期限が近いもの</h2></div>
-        <ul class="plain-list">
-          ${soon.slice(0, 6).map((i) => `<li data-action="openItem" data-id="${i.id}" role="button" tabindex="0"><span class="grow">${esc(i.title)}</span><span class="chip due ${daysUntil(i.targetDate) < 0 ? 'over' : 'soon'}">${fmtShort(i.targetDate)}・${dueText(i.targetDate)}</span></li>`).join('')}
-          ${soonSteps.slice(0, 6).map(({ i, s }) => `<li data-action="openItem" data-id="${i.id}" role="button" tabindex="0"><span class="grow">${esc(s.text)}<span class="muted small">（${esc(trunc(i.title, 16))}）</span></span><span class="chip due ${daysUntil(s.due) < 0 ? 'over' : 'soon'}">${fmtShort(s.due)}・${dueText(s.due)}</span></li>`).join('')}
-        </ul>
-      </section>`);
-    }
-
-    // ランダムピック
-    const pool = wish.filter((i) => i.status !== 'done');
-    if (pool.length) {
-      let pick = pool.find((i) => i.id === ui.randomId);
-      if (!pick) { pick = pool[Math.floor(Math.random() * pool.length)]; ui.randomId = pick.id; }
-      out.push(`<section class="card pick">
-        <div class="card-head"><h2>今日のやりたい事ピック 🎲</h2><button class="btn small soft" data-action="reroll">別のを引く</button></div>
-        <div class="pick-body" data-action="openItem" data-id="${pick.id}" role="button" tabindex="0"><h3>${esc(pick.title)}</h3>${itemChips(pick)}</div>
-      </section>`);
-    }
-
-    // カテゴリ別
-    const cats = {};
-    wish.forEach((i) => { const c = i.category || '未分類'; cats[c] = cats[c] || { t: 0, d: 0 }; cats[c].t++; if (i.status === 'done') cats[c].d++; });
-    const catKeys = Object.keys(cats);
-    if (catKeys.length) {
-      out.push(`<section class="card">
-        <div class="card-head"><h2>カテゴリ別（やりたい事）</h2><span class="muted small">全体 ${wishDone}/${wish.length} 完了</span></div>
-        ${progressBar(wishDone, wish.length)}
-        <ul class="cat-list">${catKeys.map((c) => `<li><span class="cat-name">${esc(c)}</span>${progressBar(cats[c].d, cats[c].t, 'thin')}<span class="muted small">${cats[c].d}/${cats[c].t}</span></li>`).join('')}</ul>
-      </section>`);
-    }
-
-    // 既読のコーチアドバイス（最新1件）
-    const lastRead = sortedCoach().find((c) => c.read);
-    if (lastRead) {
-      out.push(`<section class="card coach-note"><div class="card-head"><h2>前回のアドバイス</h2><a class="link" href="#coach">すべて見る</a></div>
-        <div class="muted small">${fmtDate(lastRead.date)}</div><p class="pre">${esc(trunc(lastRead.text, 160))}</p></section>`);
-    }
-
-    // 最近のジャーナル
-    const j = [...state.journal].sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt)).slice(0, 2);
-    if (j.length) {
-      out.push(`<section class="card">
-        <div class="card-head"><h2>最近のジャーナル</h2><a class="link" href="#journal">開く</a></div>
-        ${j.map((e) => `<div class="journal-mini" data-action="editJournal" data-id="${e.id}" role="button" tabindex="0"><span class="mood">${MOODS[e.mood] || '📝'}</span><div><div class="muted small">${fmtDate(e.date)}</div><p>${esc(trunc(e.text, 80))}</p></div></div>`).join('')}
-      </section>`);
-    }
-
-    if (!isEmpty) out.push(`<div class="btn-row center muted-links"><a class="link" href="#ai">🤖 AIに相談（Gemini）</a><a class="link" href="#coach">🧭 コーチに相談する</a><a class="link" href="#done">✓ 完了履歴</a></div>`);
-    return out.join('');
-  }
-
   // ───────────────────────── 画面: マトリックス ─────────────────────────
   function viewMatrix() {
-    const f = ui.matrixFilter;
-    const pool = activeItems().filter((i) => (f === 'all' ? true : i.list === f));
-    const filters = [['all', 'すべて'], ['task', 'タスク'], ['wish', 'やりたい事'], ['later', '後回し'], ['inbox', '未整理']];
+    const f = ui.matrixFilter; // v1.8.1：種別（タスク/やりたい事/…）ではなくカテゴリ（仕事/プライベート）で切り替える
+    const pool = activeItems().filter((i) => (f === 'all' ? true : i.category === f));
+    const filters = [['all', 'すべて'], ['仕事', '仕事'], ['プライベート', 'プライベート']];
     const unclassified = pool.filter((i) => !i.quadrant);
     const out = [];
     out.push(`<div class="seg-scroll">${filters.map(([k, l]) => `<button class="pill ${f === k ? 'on' : ''}" data-action="matrixFilter" data-v="${k}">${l}</button>`).join('')}</div>`);

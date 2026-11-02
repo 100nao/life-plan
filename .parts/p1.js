@@ -4,11 +4,12 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.8.0';
+  const APP_VERSION = '1.8.2';
   // カテゴリは「プライベート」「仕事」の2択に固定（v1.8.0）。読み込み時に normCategory で寄せる
   const CATEGORIES = ['プライベート', '仕事'];
   const DEFAULT_CATEGORIES = CATEGORIES;
   const normCategory = (v) => (v === '仕事' || v === '仕事/キャリア' ? '仕事' : 'プライベート');
+  const ESTIMATES = [15, 30, 60, 180, 240, 480]; // 目安時間（分）。240=半日・480=1日として扱う（v1.8.2）
   const IMPORTANCE = { high: '高', mid: '中', low: '低' };
   const IMPORTANCE_ORDER = { high: 0, mid: 1, low: 2 };
   const TIMEFRAME = { thisYear: '今年', y1_3: '1〜3年', y5: '5年以内', someday: 'いつか' };
@@ -119,6 +120,7 @@
       importance: IMPORTANCE[i.importance] ? i.importance : 'mid',
       timeframe: TIMEFRAME[i.timeframe] ? i.timeframe : '',
       targetDate: isDateStr(i.targetDate) ? i.targetDate : '',
+      estimate: ESTIMATES.includes(Number(i.estimate)) ? Number(i.estimate) : 0,
       status: STATUS[i.status] ? i.status : 'todo',
       quadrant: QUADRANTS[i.quadrant] ? i.quadrant : '',
       steps: (Array.isArray(i.steps) ? i.steps : Array.isArray(i.subtasks) ? i.subtasks : []).map(normStep).filter((s) => s.text),

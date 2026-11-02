@@ -267,7 +267,7 @@
     const bytes = new Blob([localStorage.getItem(STORE_KEY) || '']).size;
     const out = [sectionHead('設定・バックアップ')];
     out.push(syncCard());
-    out.push(aiCard());
+    out.push(aiCard().replace('<ul class="small muted note-list">', aiDailySettings() + '<ul class="small muted note-list">'));
     out.push(`<section class="card">
       <div class="card-head"><h2>ファイルでバックアップ</h2></div>
       <p class="muted small">データはこの端末のブラウザ内（localStorage）に保存されています。${sync.connected ? 'GitHub にも自動で保存されています。' : '機種変更やブラウザのデータ削除に備えて、ときどき書き出してください。'}</p>

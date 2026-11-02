@@ -1036,3 +1036,42 @@ button.hc-day.before:hover { background: var(--surface-2); }
 .hc-legend svg { width: 18px; height: 18px; }
 .hc-legend .lg-o { color: var(--stamp); } .hc-legend .lg-x { color: var(--stamp-x); }
 .hc-legend .lg-auto svg path { stroke: var(--muted); opacity: .55; }
+
+/* v1.4.0：✨ 今日の分析・🤖 AI提案 */
+.drawer-nav .badge, .tabbar a[data-nav=aisuggest] .badge { position: static; margin-left: auto; }
+.ana-card { background: linear-gradient(150deg, color-mix(in srgb, #b9c8f5 22%, var(--surface)), var(--surface) 55%, color-mix(in srgb, #f6d3e4 20%, var(--surface))); }
+.ana-card.collapsed { padding-bottom: 12px; }
+.ana-card .card-head .icon-btn { font-size: 14px; }
+.ana-summary { margin: 2px 0 8px; line-height: 1.75; }
+.ana-insights { margin: 0 0 10px; padding: 0; list-style: none; display: grid; gap: 6px; }
+.ana-insights li { position: relative; padding: 8px 12px 8px 30px; border-radius: 14px; background: color-mix(in srgb, var(--surface-2) 80%, transparent); font-size: 13.5px; line-height: 1.6; }
+.ana-insights li::before { content: '💡'; position: absolute; left: 9px; top: 8px; font-size: 13px; }
+.ana-preview { margin: 0 0 10px; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 13.5px; }
+.ana-preview li { display: flex; align-items: center; gap: 8px; }
+.qdot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+.qdot.q1 { background: var(--q1); } .qdot.q2 { background: var(--q2, #6fae9c); } .qdot.q3 { background: var(--q3, #d6a93f); } .qdot.q4 { background: var(--q4, #9aa1a6); }
+.ana-busy { display: flex; align-items: center; gap: 10px; color: var(--muted); margin: 6px 0 12px; }
+.ana-link { font-weight: 700; }
+.ana-mini { padding-bottom: 8px; }
+.sug-lead { margin: -4px 2px 14px; line-height: 1.6; }
+.sug-card { position: relative; padding-left: 20px; }
+.sug-card::before { content: ''; position: absolute; left: 0; top: 14px; bottom: 14px; width: 4px; border-radius: 0 4px 4px 0; background: var(--muted); }
+.sug-card.q-q1::before { background: var(--q1); } .sug-card.q-q2::before { background: var(--q2, #6fae9c); } .sug-card.q-q3::before { background: var(--q3, #d6a93f); } .sug-card.q-q4::before { background: var(--q4, #9aa1a6); }
+.sug-head { display: flex; align-items: flex-start; gap: 8px; }
+.sug-title { flex: 1; margin: 0; font-size: 16px; line-height: 1.45; }
+.sug-q { display: flex; align-items: center; gap: 8px; margin: 8px 0 4px; }
+.sug-q select { flex: 1; max-width: 220px; padding: 6px 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
+.sug-more { margin: 6px 0 2px; }
+.sug-more summary { cursor: pointer; font-size: 13.5px; color: var(--muted); list-style: none; }
+.sug-more summary::-webkit-details-marker { display: none; }
+.sug-more summary::before { content: '▸ '; } .sug-more[open] summary::before { content: '▾ '; }
+.sug-why { margin: 8px 0 6px; font-size: 14px; line-height: 1.65; }
+.sug-steps { margin: 4px 0 4px 1.2em; padding: 0; font-size: 14px; line-height: 1.7; }
+.sug-actions { margin-top: 10px; justify-content: space-between; }
+.sug-actions .icon-btn { font-size: 18px; }
+.sug-past summary { cursor: pointer; font-weight: 700; }
+.sug-past-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 13.5px; }
+.chip.ai-chip { background: color-mix(in srgb, #b9c8f5 30%, var(--surface)); border-color: transparent; }
+.ai-daily-set { margin: 6px 0 10px; padding: 10px 12px 2px; border-radius: 16px; background: var(--surface-2); }
+.ai-daily-set .check-line { flex-wrap: wrap; }
+.coach-sug a { margin-top: 6px; }

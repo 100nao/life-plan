@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.3.2';
+  const APP_VERSION = '1.4.0';
   const DEFAULT_CATEGORIES = ['旅行', '仕事/キャリア', '健康', '家族', '趣味', '学び', 'お金', 'その他'];
   const IMPORTANCE = { high: '高', mid: '中', low: '低' };
   const IMPORTANCE_ORDER = { high: 0, mid: 1, low: 2 };
@@ -98,7 +98,7 @@
 
   // ───────────────────────── 保存 ─────────────────────────
   function defaultState() {
-    return { schema: 2, categories: [...DEFAULT_CATEGORIES], categoriesAt: '', items: [], lessons: [], journal: [], coachNotes: [], habits: [], focus: {}, focusAt: {}, deleted: {}, settings: { theme: 'auto', bg: 'mist' } };
+    return { schema: 2, categories: [...DEFAULT_CATEGORIES], categoriesAt: '', items: [], lessons: [], journal: [], coachNotes: [], habits: [], aiAnalyses: [], aiSuggestions: [], focus: {}, focusAt: {}, deleted: {}, settings: { theme: 'auto', bg: 'mist' } };
   }
   function normStep(s) {
     if (typeof s === 'string') s = { text: s };
@@ -149,7 +149,7 @@
   function normPhotoIds(a) { return Array.isArray(a) ? [...new Set(a.map(String).filter((x) => PHOTO_ID_RE.test(x)))].slice(0, 30) : []; }
   function normCoach(c) {
     const t = nowIso();
-    return { id: c.id || uid(), date: isDateStr(c.date) ? c.date : todayStr(), title: String(c.title || ''), text: String(c.text || ''), read: c.read !== false, source: c.source || '', stepsResult: Array.isArray(c.stepsResult) ? c.stepsResult.map(String) : [], createdAt: c.createdAt || t, updatedAt: c.updatedAt || t };
+    return { id: c.id || uid(), date: isDateStr(c.date) ? c.date : todayStr(), title: String(c.title || ''), text: String(c.text || ''), read: c.read !== false, source: c.source || '', stepsResult: Array.isArray(c.stepsResult) ? c.stepsResult.map(String) : [], suggestIds: Array.isArray(c.suggestIds) ? c.suggestIds.map(String) : [], createdAt: c.createdAt || t, updatedAt: c.updatedAt || t };
   }
   // 習慣スタンプ（毎日の目標）。done は押した日の 'YYYY-MM-DD' の配列（昇順・重複なし）
   function isRealDay(s) {
@@ -170,6 +170,25 @@
       createdAt: h.createdAt || t, updatedAt: h.updatedAt || t,
     };
   }
+  // v1.4.0：毎日の AI 分析と AI提案（自分のタスクとは別のリスト）
+  const SUG_STATUS = ['open', 'moved', 'dismissed'];
+  function normAiSuggestion(s) {
+    const t = nowIso(); const q = String(s.quadrant || '');
+    return {
+      id: String(s.id || uid()), title: String(s.title || '').trim() || '（無題）', quadrant: QUADRANTS[q] ? q : 'q2', why: String(s.why || ''),
+      steps: (Array.isArray(s.steps) ? s.steps : []).map((x) => String(x || '').trim()).filter(Boolean).slice(0, 10),
+      source: s.source === 'coach' ? 'coach' : 'gemini', ref: String(s.ref || ''), date: isDateStr(s.date) ? s.date : todayStr(),
+      status: SUG_STATUS.includes(s.status) ? s.status : 'open', itemId: String(s.itemId || ''), auto: !!s.auto, createdAt: s.createdAt || t, updatedAt: s.updatedAt || t,
+    };
+  }
+  function normAnalysis(a) {
+    const t = nowIso(); const date = isDateStr(a.date) ? a.date : todayStr();
+    return {
+      id: 'ana:' + date, date, summary: String(a.summary || ''), insights: (Array.isArray(a.insights) ? a.insights : []).map(String).slice(0, 3),
+      suggestionIds: (Array.isArray(a.suggestionIds) ? a.suggestionIds : []).map(String), parsed: a.parsed !== false, model: String(a.model || ''), runs: Math.max(1, Number(a.runs) || 1),
+      createdAt: a.createdAt || t, updatedAt: a.updatedAt || t,
+    };
+  }
   function normalizeState(raw) {
     const s = defaultState();
     if (!raw || typeof raw !== 'object') return s;
@@ -179,6 +198,8 @@
     s.journal = (raw.journal || []).map(normJournal);
     s.coachNotes = (raw.coachNotes || []).map(normCoach);
     s.habits = (Array.isArray(raw.habits) ? raw.habits : []).filter((h) => h && typeof h === 'object').map(normHabit); // v1.3.0〜（古いデータには無い）
+    s.aiAnalyses = (Array.isArray(raw.aiAnalyses) ? raw.aiAnalyses : []).filter((a) => a && typeof a === 'object').map(normAnalysis); // v1.4.0〜
+    s.aiSuggestions = (Array.isArray(raw.aiSuggestions) ? raw.aiSuggestions : []).filter((a) => a && typeof a === 'object' && a.title).map(normAiSuggestion);
     s.focus = raw.focus && typeof raw.focus === 'object' ? { ...raw.focus } : {};
     s.focusAt = raw.focusAt && typeof raw.focusAt === 'object' ? { ...raw.focusAt } : {};
     s.deleted = raw.deleted && typeof raw.deleted === 'object' ? { ...raw.deleted } : {};
@@ -217,7 +238,7 @@
     const next = normalizeState(JSON.parse(snap));
     const now = nowIso();
     next.deleted = { ...next.deleted, ...prev.deleted };
-    ['items', 'lessons', 'journal', 'coachNotes', 'habits'].forEach((k) => {
+    ['items', 'lessons', 'journal', 'coachNotes', 'habits', 'aiAnalyses', 'aiSuggestions'].forEach((k) => {
       const prevMap = new Map(prev[k].map((x) => [x.id, JSON.stringify(x)]));
       const nextIds = new Set(next[k].map((x) => x.id));
       next[k].forEach((x) => { if (prevMap.get(x.id) !== JSON.stringify(x)) { x.updatedAt = now; delete next.deleted[x.id]; } });

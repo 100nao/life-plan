@@ -63,8 +63,8 @@
 
   // ───────────────────────── ルーティングと描画 ─────────────────────────
   const main = $('#main');
-  const VIEWS = { home: viewHome, matrix: viewMatrix, wish: viewWish, later: viewLater, lessons: viewLessons, inbox: viewInbox, journal: viewJournal, done: viewDone, search: viewSearch, settings: viewSettings, coach: viewCoach, item: viewItem, ai: viewAI, habits: viewHabits };
-  const TITLES = { home: 'ホーム', matrix: 'マトリックス', wish: 'やりたい事', later: '後回しでいい事', lessons: '習い事', inbox: '未整理', journal: 'ジャーナル', done: '完了履歴', search: '検索', settings: '設定', coach: 'コーチに相談', item: '詳細', ai: 'AIに相談', habits: '習慣スタンプ' };
+  const VIEWS = { home: viewHome, matrix: viewMatrix, wish: viewWish, later: viewLater, lessons: viewLessons, inbox: viewInbox, journal: viewJournal, done: viewDone, search: viewSearch, settings: viewSettings, coach: viewCoach, item: viewItem, ai: viewAI, habits: viewHabits, aisuggest: viewAiSuggest };
+  const TITLES = { home: 'ホーム', matrix: 'マトリックス', wish: 'やりたい事', later: '後回しでいい事', lessons: '習い事', inbox: '未整理', journal: 'ジャーナル', done: '完了履歴', search: '検索', settings: '設定', coach: 'コーチに相談', item: '詳細', ai: 'AIに相談', habits: '習慣スタンプ', aisuggest: 'AI提案' };
   function route() {
     const h = decodeURIComponent(location.hash.replace(/^#\/?/, ''));
     const idx = h.indexOf('/');
@@ -84,6 +84,8 @@
     const badge = $('#inboxBadge'); badge.hidden = !n; badge.textContent = n > 99 ? '99+' : n;
     const unread = state.coachNotes.filter((c) => !c.read).length;
     const cb = $('#coachBadge'); if (cb) { cb.hidden = !unread; cb.textContent = unread; }
+    const ns = state.aiSuggestions.filter((s) => s.status === 'open').length;
+    $$('.sug-badge').forEach((b) => { b.hidden = !ns; b.textContent = ns > 99 ? '99+' : ns; });
     document.title = `${TITLES[r.name]}｜ライフプラン`;
     const key = r.name + '/' + r.arg;
     if (keepScroll && key === ui.lastRoute) window.scrollTo(0, y); else if (!(r.name === 'settings' && r.arg)) window.scrollTo(0, 0);

@@ -27,6 +27,7 @@
   function itemChips(i, o = {}) {
     const c = [];
     if (o.showList) c.push(chip(LISTS[i.list], 'list'));
+    if (i.source === 'ai') c.push(chip('🤖 AI提案から', 'ai-chip'));
     if (i.quadrant && !o.hideQuadrant) c.push(chip(QUADRANTS[i.quadrant].label, 'qchip ' + i.quadrant));
     if (i.category) c.push(chip(i.category, 'cat'));
     if (i.list !== 'inbox' || i.importance !== 'mid') c.push(chip('重要度 ' + IMPORTANCE[i.importance], 'imp-' + i.importance));
@@ -75,6 +76,7 @@
       <div class="advice-head"><div>${c.read ? '' : '<span class="new-badge">NEW</span>'}<b>${esc(c.title || fmtDate(c.date))}</b>${c.title ? `<span class="muted small"> ${fmtDate(c.date)}</span>` : ''}</div>
         ${prominent ? '' : `<button class="icon-btn small danger" data-action="deleteCoach" data-id="${c.id}" aria-label="削除">${ICON.trash}</button>`}</div>
       <p class="pre">${esc(prominent && long ? trunc(c.text, 400) : c.text)}</p>
+      ${c.suggestIds && c.suggestIds.length ? `<div class="steps-result coach-sug"><b>🤖 AI提案に ${c.suggestIds.length}件</b><ul>${c.suggestIds.map((id) => state.aiSuggestions.find((s) => s.id === id)).filter(Boolean).map((s) => `<li>${esc(s.title)}<span class="muted small">（${QUADRANTS[s.quadrant].label}${s.status === 'moved' ? '・移動済み' : s.status === 'dismissed' ? '・見送り' : ''}）</span></li>`).join('')}</ul><a class="btn soft small" href="#aisuggest">AI提案を見る</a></div>` : ''}
       ${c.stepsResult && c.stepsResult.length ? `<div class="steps-result"><b>追加されたステップ</b><ul>${c.stepsResult.map((s) => `<li>${esc(s)}</li>`).join('')}</ul></div>` : ''}
       ${prominent ? `<div class="btn-row"><button class="btn primary small" data-action="markRead" data-id="${c.id}">✓ 読んだ</button>${long ? '<a class="btn soft small" href="#coach">全文を見る</a>' : ''}</div>` : ''}
     </article>`;
@@ -114,6 +116,9 @@
         ${unread.length > 3 ? `<a class="link" href="#coach">ほか ${unread.length - 3} 件を見る</a>` : ''}
       </section>`);
     }
+
+    // ✨ 今日の分析（Gemini）
+    out.push(homeAnalysisCard());
 
     if (isEmpty) {
       out.push(`<section class="card welcome">

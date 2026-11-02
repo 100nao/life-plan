@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.3.2';
+  const APP_VERSION = '1.4.0';
   const DEFAULT_CATEGORIES = ['旅行', '仕事/キャリア', '健康', '家族', '趣味', '学び', 'お金', 'その他'];
   const IMPORTANCE = { high: '高', mid: '中', low: '低' };
   const IMPORTANCE_ORDER = { high: 0, mid: 1, low: 2 };
@@ -98,7 +98,7 @@
 
   // ───────────────────────── 保存 ─────────────────────────
   function defaultState() {
-    return { schema: 2, categories: [...DEFAULT_CATEGORIES], categoriesAt: '', items: [], lessons: [], journal: [], coachNotes: [], habits: [], focus: {}, focusAt: {}, deleted: {}, settings: { theme: 'auto', bg: 'mist' } };
+    return { schema: 2, categories: [...DEFAULT_CATEGORIES], categoriesAt: '', items: [], lessons: [], journal: [], coachNotes: [], habits: [], aiAnalyses: [], aiSuggestions: [], focus: {}, focusAt: {}, deleted: {}, settings: { theme: 'auto', bg: 'mist' } };
   }
   function normStep(s) {
     if (typeof s === 'string') s = { text: s };
@@ -149,7 +149,7 @@
   function normPhotoIds(a) { return Array.isArray(a) ? [...new Set(a.map(String).filter((x) => PHOTO_ID_RE.test(x)))].slice(0, 30) : []; }
   function normCoach(c) {
     const t = nowIso();
-    return { id: c.id || uid(), date: isDateStr(c.date) ? c.date : todayStr(), title: String(c.title || ''), text: String(c.text || ''), read: c.read !== false, source: c.source || '', stepsResult: Array.isArray(c.stepsResult) ? c.stepsResult.map(String) : [], createdAt: c.createdAt || t, updatedAt: c.updatedAt || t };
+    return { id: c.id || uid(), date: isDateStr(c.date) ? c.date : todayStr(), title: String(c.title || ''), text: String(c.text || ''), read: c.read !== false, source: c.source || '', stepsResult: Array.isArray(c.stepsResult) ? c.stepsResult.map(String) : [], suggestIds: Array.isArray(c.suggestIds) ? c.suggestIds.map(String) : [], createdAt: c.createdAt || t, updatedAt: c.updatedAt || t };
   }
   // 習慣スタンプ（毎日の目標）。done は押した日の 'YYYY-MM-DD' の配列（昇順・重複なし）
   function isRealDay(s) {
@@ -170,6 +170,25 @@
       createdAt: h.createdAt || t, updatedAt: h.updatedAt || t,
     };
   }
+  // v1.4.0：毎日の AI 分析と AI提案（自分のタスクとは別のリスト）
+  const SUG_STATUS = ['open', 'moved', 'dismissed'];
+  function normAiSuggestion(s) {
+    const t = nowIso(); const q = String(s.quadrant || '');
+    return {
+      id: String(s.id || uid()), title: String(s.title || '').trim() || '（無題）', quadrant: QUADRANTS[q] ? q : 'q2', why: String(s.why || ''),
+      steps: (Array.isArray(s.steps) ? s.steps : []).map((x) => String(x || '').trim()).filter(Boolean).slice(0, 10),
+      source: s.source === 'coach' ? 'coach' : 'gemini', ref: String(s.ref || ''), date: isDateStr(s.date) ? s.date : todayStr(),
+      status: SUG_STATUS.includes(s.status) ? s.status : 'open', itemId: String(s.itemId || ''), auto: !!s.auto, createdAt: s.createdAt || t, updatedAt: s.updatedAt || t,
+    };
+  }
+  function normAnalysis(a) {
+    const t = nowIso(); const date = isDateStr(a.date) ? a.date : todayStr();
+    return {
+      id: 'ana:' + date, date, summary: String(a.summary || ''), insights: (Array.isArray(a.insights) ? a.insights : []).map(String).slice(0, 3),
+      suggestionIds: (Array.isArray(a.suggestionIds) ? a.suggestionIds : []).map(String), parsed: a.parsed !== false, model: String(a.model || ''), runs: Math.max(1, Number(a.runs) || 1),
+      createdAt: a.createdAt || t, updatedAt: a.updatedAt || t,
+    };
+  }
   function normalizeState(raw) {
     const s = defaultState();
     if (!raw || typeof raw !== 'object') return s;
@@ -179,6 +198,8 @@
     s.journal = (raw.journal || []).map(normJournal);
     s.coachNotes = (raw.coachNotes || []).map(normCoach);
     s.habits = (Array.isArray(raw.habits) ? raw.habits : []).filter((h) => h && typeof h === 'object').map(normHabit); // v1.3.0〜（古いデータには無い）
+    s.aiAnalyses = (Array.isArray(raw.aiAnalyses) ? raw.aiAnalyses : []).filter((a) => a && typeof a === 'object').map(normAnalysis); // v1.4.0〜
+    s.aiSuggestions = (Array.isArray(raw.aiSuggestions) ? raw.aiSuggestions : []).filter((a) => a && typeof a === 'object' && a.title).map(normAiSuggestion);
     s.focus = raw.focus && typeof raw.focus === 'object' ? { ...raw.focus } : {};
     s.focusAt = raw.focusAt && typeof raw.focusAt === 'object' ? { ...raw.focusAt } : {};
     s.deleted = raw.deleted && typeof raw.deleted === 'object' ? { ...raw.deleted } : {};
@@ -217,7 +238,7 @@
     const next = normalizeState(JSON.parse(snap));
     const now = nowIso();
     next.deleted = { ...next.deleted, ...prev.deleted };
-    ['items', 'lessons', 'journal', 'coachNotes', 'habits'].forEach((k) => {
+    ['items', 'lessons', 'journal', 'coachNotes', 'habits', 'aiAnalyses', 'aiSuggestions'].forEach((k) => {
       const prevMap = new Map(prev[k].map((x) => [x.id, JSON.stringify(x)]));
       const nextIds = new Set(next[k].map((x) => x.id));
       next[k].forEach((x) => { if (prevMap.get(x.id) !== JSON.stringify(x)) { x.updatedAt = now; delete next.deleted[x.id]; } });
@@ -302,6 +323,7 @@
   function itemChips(i, o = {}) {
     const c = [];
     if (o.showList) c.push(chip(LISTS[i.list], 'list'));
+    if (i.source === 'ai') c.push(chip('🤖 AI提案から', 'ai-chip'));
     if (i.quadrant && !o.hideQuadrant) c.push(chip(QUADRANTS[i.quadrant].label, 'qchip ' + i.quadrant));
     if (i.category) c.push(chip(i.category, 'cat'));
     if (i.list !== 'inbox' || i.importance !== 'mid') c.push(chip('重要度 ' + IMPORTANCE[i.importance], 'imp-' + i.importance));
@@ -350,6 +372,7 @@
       <div class="advice-head"><div>${c.read ? '' : '<span class="new-badge">NEW</span>'}<b>${esc(c.title || fmtDate(c.date))}</b>${c.title ? `<span class="muted small"> ${fmtDate(c.date)}</span>` : ''}</div>
         ${prominent ? '' : `<button class="icon-btn small danger" data-action="deleteCoach" data-id="${c.id}" aria-label="削除">${ICON.trash}</button>`}</div>
       <p class="pre">${esc(prominent && long ? trunc(c.text, 400) : c.text)}</p>
+      ${c.suggestIds && c.suggestIds.length ? `<div class="steps-result coach-sug"><b>🤖 AI提案に ${c.suggestIds.length}件</b><ul>${c.suggestIds.map((id) => state.aiSuggestions.find((s) => s.id === id)).filter(Boolean).map((s) => `<li>${esc(s.title)}<span class="muted small">（${QUADRANTS[s.quadrant].label}${s.status === 'moved' ? '・移動済み' : s.status === 'dismissed' ? '・見送り' : ''}）</span></li>`).join('')}</ul><a class="btn soft small" href="#aisuggest">AI提案を見る</a></div>` : ''}
       ${c.stepsResult && c.stepsResult.length ? `<div class="steps-result"><b>追加されたステップ</b><ul>${c.stepsResult.map((s) => `<li>${esc(s)}</li>`).join('')}</ul></div>` : ''}
       ${prominent ? `<div class="btn-row"><button class="btn primary small" data-action="markRead" data-id="${c.id}">✓ 読んだ</button>${long ? '<a class="btn soft small" href="#coach">全文を見る</a>' : ''}</div>` : ''}
     </article>`;
@@ -389,6 +412,9 @@
         ${unread.length > 3 ? `<a class="link" href="#coach">ほか ${unread.length - 3} 件を見る</a>` : ''}
       </section>`);
     }
+
+    // ✨ 今日の分析（Gemini）
+    out.push(homeAnalysisCard());
 
     if (isEmpty) {
       out.push(`<section class="card welcome">
@@ -890,7 +916,7 @@
     const bytes = new Blob([localStorage.getItem(STORE_KEY) || '']).size;
     const out = [sectionHead('設定・バックアップ')];
     out.push(syncCard());
-    out.push(aiCard());
+    out.push(aiCard().replace('<ul class="small muted note-list">', aiDailySettings() + '<ul class="small muted note-list">'));
     out.push(`<section class="card">
       <div class="card-head"><h2>ファイルでバックアップ</h2></div>
       <p class="muted small">データはこの端末のブラウザ内（localStorage）に保存されています。${sync.connected ? 'GitHub にも自動で保存されています。' : '機種変更やブラウザのデータ削除に備えて、ときどき書き出してください。'}</p>
@@ -1356,8 +1382,8 @@
 
   // ───────────────────────── ルーティングと描画 ─────────────────────────
   const main = $('#main');
-  const VIEWS = { home: viewHome, matrix: viewMatrix, wish: viewWish, later: viewLater, lessons: viewLessons, inbox: viewInbox, journal: viewJournal, done: viewDone, search: viewSearch, settings: viewSettings, coach: viewCoach, item: viewItem, ai: viewAI, habits: viewHabits };
-  const TITLES = { home: 'ホーム', matrix: 'マトリックス', wish: 'やりたい事', later: '後回しでいい事', lessons: '習い事', inbox: '未整理', journal: 'ジャーナル', done: '完了履歴', search: '検索', settings: '設定', coach: 'コーチに相談', item: '詳細', ai: 'AIに相談', habits: '習慣スタンプ' };
+  const VIEWS = { home: viewHome, matrix: viewMatrix, wish: viewWish, later: viewLater, lessons: viewLessons, inbox: viewInbox, journal: viewJournal, done: viewDone, search: viewSearch, settings: viewSettings, coach: viewCoach, item: viewItem, ai: viewAI, habits: viewHabits, aisuggest: viewAiSuggest };
+  const TITLES = { home: 'ホーム', matrix: 'マトリックス', wish: 'やりたい事', later: '後回しでいい事', lessons: '習い事', inbox: '未整理', journal: 'ジャーナル', done: '完了履歴', search: '検索', settings: '設定', coach: 'コーチに相談', item: '詳細', ai: 'AIに相談', habits: '習慣スタンプ', aisuggest: 'AI提案' };
   function route() {
     const h = decodeURIComponent(location.hash.replace(/^#\/?/, ''));
     const idx = h.indexOf('/');
@@ -1377,6 +1403,8 @@
     const badge = $('#inboxBadge'); badge.hidden = !n; badge.textContent = n > 99 ? '99+' : n;
     const unread = state.coachNotes.filter((c) => !c.read).length;
     const cb = $('#coachBadge'); if (cb) { cb.hidden = !unread; cb.textContent = unread; }
+    const ns = state.aiSuggestions.filter((s) => s.status === 'open').length;
+    $$('.sug-badge').forEach((b) => { b.hidden = !ns; b.textContent = ns > 99 ? '99+' : ns; });
     document.title = `${TITLES[r.name]}｜ライフプラン`;
     const key = r.name + '/' + r.arg;
     if (keepScroll && key === ui.lastRoute) window.scrollTo(0, y); else if (!(r.name === 'settings' && r.arg)) window.scrollTo(0, 0);
@@ -2030,7 +2058,7 @@
   // coach-inbox.json の取り込み（重複しない）
   function ingestCoachInbox(obj) {
     const msgs = Array.isArray(obj) ? obj : obj && Array.isArray(obj.messages) ? obj.messages : obj && Array.isArray(obj.advice) ? obj.advice : obj ? [obj] : [];
-    let added = 0;
+    let added = 0; const newSug = [];
     msgs.forEach((m) => {
       if (!m || typeof m !== 'object') return;
       const text = String(m.text || m.advice || m.message || m.body || '').trim();
@@ -2039,19 +2067,24 @@
       else if (Array.isArray(m.tasks)) sets = m.tasks;
       else if (m.taskTitle && Array.isArray(m.steps)) sets = [{ taskTitle: m.taskTitle, steps: m.steps }];
       else if (Array.isArray(m.steps) && m.steps.length && typeof m.steps[0] === 'object' && m.steps[0].taskTitle) sets = m.steps;
-      if (!text && !sets.length) return;
-      const id = 'coach:' + (m.id ? String(m.id) : hashStr((m.date || '') + '|' + text + '|' + JSON.stringify(sets)));
+      const tsug = Array.isArray(m.taskSuggestions) ? m.taskSuggestions : [];
+      if (!text && !sets.length && !tsug.length) return;
+      const id = 'coach:' + (m.id ? String(m.id) : hashStr((m.date || '') + '|' + text + '|' + JSON.stringify(sets) + (tsug.length ? '|' + JSON.stringify(tsug) : '')));
       if (state.coachNotes.some((c) => c.id === id) || state.deleted[id]) return;
       const result = sets.length ? applyStepSets(sets) : [];
-      state.coachNotes.push(normCoach({ id, date: toDateStr(m.date) || todayStr(), title: text ? String(m.title || '') : 'ステップの提案', text: text || 'ステップの提案が届きました。', read: false, source: 'github', stepsResult: result }));
+      const date = toDateStr(m.date) || todayStr();
+      const sug = tsug.length ? ingestCoachTaskSuggestions(id, tsug, date) : [];
+      newSug.push(...sug);
+      state.coachNotes.push(normCoach({ id, date, title: text ? String(m.title || '') : (sets.length ? 'ステップの提案' : 'タスクの提案'), text: text || (sets.length ? 'ステップの提案が届きました。' : 'タスクの提案が届きました。'), read: false, source: 'github', stepsResult: result, suggestIds: sug.map((s) => s.id) }));
       added++;
     });
-    if (added) { save(); rerenderSoft(); toast(`💬 コーチから新着アドバイスが ${added}件 届きました`); }
+    if (added) { save(); rerenderSoft(); toast(`💬 コーチから新着アドバイスが ${added}件 届きました${newSug.length ? `（AI提案 ${newSug.length}件）` : ''}`); }
+    if (newSug.length) setTimeout(() => autoMoveIfOn(newSug), 1600);
     return added;
   }
 
   // ───────────────────────── 統合（同期・読み込み共通） ─────────────────────────
-  const SYNC_COLLECTIONS = ['items', 'lessons', 'journal', 'coachNotes', 'habits'];
+  const SYNC_COLLECTIONS = ['items', 'lessons', 'journal', 'coachNotes', 'habits', 'aiAnalyses', 'aiSuggestions'];
   const canonical = (a, b) => (b.createdAt || '').localeCompare(a.createdAt || '') || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   function mergeStates(local, remote) {
     const out = normalizeState(JSON.parse(JSON.stringify(local)));
@@ -2260,7 +2293,7 @@
   const AI_ENDPOINT = (model) => `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const AI_CHIPS = ['今週何から手をつける？', '停滞タスクの原因を一緒に考えて', 'このタスクをステップに分けて', 'ジャーナルを振り返って'];
   function loadAi() {
-    try { const o = JSON.parse(localStorage.getItem(AI_KEY) || '{}'); return { key: String(o.key || ''), model: (o.mv === 2 && AI_MODELS[o.model]) ? o.model : AI_DEFAULT_MODEL, share: o.share !== false, mv: 2 }; } catch (e) { return { key: '', model: AI_DEFAULT_MODEL, share: true, mv: 2 }; }
+    try { const o = JSON.parse(localStorage.getItem(AI_KEY) || '{}'); return { key: String(o.key || ''), model: (o.mv === 2 && AI_MODELS[o.model]) ? o.model : AI_DEFAULT_MODEL, share: o.share !== false, daily: o.daily !== false, autoMove: o.autoMove === true, mv: 2 }; } catch (e) { return { key: '', model: AI_DEFAULT_MODEL, share: true, mv: 2 }; }
   }
   let ai = loadAi();
   function saveAi() { try { localStorage.setItem(AI_KEY, JSON.stringify(ai)); } catch (e) { /* noop */ } }
@@ -2932,6 +2965,263 @@
     toast('📝 ' + r.msg, r.added ? { label: '元に戻す', run: () => { restore(r.snap); rerender(); } } : undefined);
   }
 
+  // ───────────────────────── v1.4.0：毎日の AI 分析と「AI提案」 ─────────────────────────
+  // ・分析（state.aiAnalyses）は1日1件（id 'ana:YYYY-MM-DD'）。同期して AIコーチも読めるようにする
+  // ・提案（state.aiSuggestions）は自分のタスクとは別のリスト。Gemini（source 'gemini'）とコーチ受信箱（source 'coach'）の両方が入る
+  //   自分のリストへ移すのはユーザーが「→ 自分のリストへ」を押したとき（設定でオンにしたときだけ自動）
+  // ・APIキーは localStorage（lifeplan.ai）だけ。送り先は Google の Gemini API だけ
+  const AI_DAILY_KEY = 'lifeplan.aiDaily';
+  const AI_MANUAL_MAX = 3; // 「もう一度分析」は1日3回まで
+  const AI_SUG_MAX = 3;
+  const AI_ANALYSIS_KEEP = 30;
+  function loadAiDaily() { try { const o = JSON.parse(localStorage.getItem(AI_DAILY_KEY) || '{}'); return { autoDate: String(o.autoDate || ''), runDate: String(o.runDate || ''), runs: Number(o.runs) || 0, collapsed: !!o.collapsed }; } catch (e) { return { autoDate: '', runDate: '', runs: 0, collapsed: false }; } }
+  let aiDaily = loadAiDaily();
+  function saveAiDaily() { try { localStorage.setItem(AI_DAILY_KEY, JSON.stringify(aiDaily)); } catch (e) { /* noop */ } }
+  const aiDailyOn = () => ai.daily !== false; // 既定オン
+  const aiAutoMoveOn = () => ai.autoMove === true; // 既定オフ
+  const manualLeft = () => AI_MANUAL_MAX - (aiDaily.runDate === todayStr() ? aiDaily.runs : 0);
+  const anaUi = { busy: false, error: '' };
+  const openSuggestions = () => state.aiSuggestions.filter((s) => s.status === 'open');
+  const latestAnalysis = () => [...state.aiAnalyses].sort((a, b) => b.date.localeCompare(a.date))[0] || null;
+
+  // 分析用の小さな要約（トークンを節約）
+  function analysisContext() {
+    const L = [];
+    const t = todayStr();
+    L.push(`今日：${t}（${'日月火水木金土'[new Date().getDay()]}）`);
+    const focus = state.focus[thisYear()] || '';
+    if (focus) L.push(`今年のフォーカス：${trunc(focus, 60)}`);
+    const act = activeItems().filter((i) => i.list !== 'inbox' || i.title);
+    const qOrder = { q1: 0, q2: 1, q3: 2, q4: 3, '': 4 };
+    const items = [...act].sort((a, b) => qOrder[a.quadrant] - qOrder[b.quadrant] || (isStuck(b) - isStuck(a)) || b.updatedAt.localeCompare(a.updatedAt)).slice(0, 30);
+    L.push(`## 未完了（${act.length}件）`);
+    items.forEach((i) => {
+      const meta = [i.quadrant || '-', i.list, i.status, `${idleDays(i)}日前に更新`, isStuck(i) ? '停滞' : '', i.steps.length ? `ステップ${stepsDone(i)}/${i.steps.length}` : '', i.targetDate ? `期限${i.targetDate}` : ''].filter(Boolean).join(',');
+      const next = (i.steps.find((s) => !s.done) || {}).text;
+      L.push(`- ${trunc(i.title, 36)}[${meta}]${next ? ` 次:${trunc(next, 24)}` : ''}`);
+    });
+    const doneRecent = state.items.filter((i) => i.status === 'done' && i.completedAt && daysSince(i.completedAt) <= 7).slice(0, 8);
+    if (doneRecent.length) L.push(`## 直近7日の完了：${doneRecent.map((i) => trunc(i.title, 20)).join('、')}`);
+    if (state.habits.length) {
+      L.push('## 習慣スタンプ');
+      state.habits.slice(0, 8).forEach((h) => {
+        const p = pomuInfo(h); const w = addDays(t, -14);
+        const o = h.done.filter((d) => d >= w && d < t).length; const x = (h.missed || []).filter((d) => d >= w && d < t).length;
+        L.push(`- ${trunc(h.name, 20)}：累計${p.total}日・連続${p.streak}日・直近14日 〇${o}×${x}・今日${p.doneToday ? '〇' : p.missedToday ? '×' : '未'}`);
+      });
+    }
+    const ls = state.lessons.filter((l) => l.status === 'active' || l.status === 'considering').slice(0, 6);
+    if (ls.length) { L.push('## 習い事'); ls.forEach((l) => L.push(`- ${trunc(l.name, 20)}：${LESSON_STATUS[l.status]}・今月${sessionsThisMonth(l)}回`)); }
+    const since = addDays(t, -14);
+    const j = state.journal.filter((e) => e.date >= since && e.text.trim()).sort((a, b) => (a.date + a.createdAt).localeCompare(b.date + b.createdAt)).slice(-12);
+    if (j.length) { L.push('## 直近14日のジャーナル'); j.forEach((e) => L.push(`- ${e.date}${e.mood ? ` 気分${e.mood}` : ''}：${trunc(e.text.replace(/\s+/g, ' '), 110)}`)); }
+    const s = L.join('\n');
+    return s.length > 4500 ? s.slice(0, 4500) + '\n…' : s;
+  }
+  const ANALYSIS_SYSTEM = [
+    'あなたは「ライフプラン」アプリの毎日の分析を担当する、あたたかく誠実なパーソナルコーチです。日本語で答えます。',
+    'ユーザーのデータ（要約）を読み、今日の分析を次の JSON だけで返してください（コードブロックや説明文は不要）：',
+    '{"summary": "2〜4文。やさしいコーチの口調で、今の状況と今日の一歩", "insights": ["気づき（最大3つ・各60字以内）"], "taskSuggestions": [{"title": "新しいタスク名（30字以内）", "quadrant": "q1|q2|q3|q4", "why": "なぜ今これか（60字以内）", "steps": ["5〜30分でできるステップ", "…"]}]}',
+    'quadrant は必ず q1（緊急かつ重要）・q2（重要だが緊急でない）・q3（緊急だが重要でない）・q4（どちらでもない）のどれか。taskSuggestions は最大3件、steps は2〜5個。',
+    '既存のタスクと同じ・ほぼ同じものは提案しないでください（既存タスクの次の一歩は steps ではなく summary で触れてください）。責めずに、小さく始められる提案を。',
+  ].join('\n');
+  function normSuggestion(s, extra = {}) {
+    if (!s || typeof s !== 'object') return null;
+    const title = trunc(String(s.title || s.taskTitle || s.task || '').replace(/\s+/g, ' ').trim(), 80);
+    if (!title) return null;
+    const q = String(s.quadrant || '').trim().toLowerCase();
+    return {
+      title, quadrant: QUADRANTS[q] ? q : 'q2', why: trunc(String(s.why || s.reason || '').trim(), 240),
+      steps: (Array.isArray(s.steps) ? s.steps : []).map((x) => trunc(String(typeof x === 'object' && x ? x.text || x.title || '' : x).replace(/^\s*\d+\s*[.)．、]\s*/, '').trim(), 100)).filter(Boolean).slice(0, 10),
+      ...extra,
+    };
+  }
+  // Gemini の返事を読み取る（コードブロックを外す／読めなければ文章だけ）
+  function parseAnalysis(text) {
+    const raw = String(text || '').trim();
+    const unfenced = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+    let o = null;
+    try { o = JSON.parse(unfenced); } catch (e) { o = extractJson(raw); }
+    if (o && Array.isArray(o)) o = o[0];
+    if (o && typeof o === 'object' && (o.summary || o.insights || o.taskSuggestions)) {
+      return {
+        ok: true, summary: trunc(String(o.summary || '').trim(), 600),
+        insights: (Array.isArray(o.insights) ? o.insights : []).map((x) => trunc(String(x || '').trim(), 160)).filter(Boolean).slice(0, 3),
+        suggestions: (Array.isArray(o.taskSuggestions) ? o.taskSuggestions : []).map((x) => normSuggestion(x)).filter(Boolean),
+      };
+    }
+    const plain = unfenced.replace(/[{}[\]"]/g, ' ').replace(/\s+/g, ' ').trim();
+    return { ok: false, summary: trunc(plain || '（分析を読み取れませんでした）', 600), insights: [], suggestions: [] };
+  }
+  // 既存のタスク・まだ開いている提案と同じものは入れない
+  function dedupeSuggestions(list) {
+    const seen = new Set([...state.items.filter((i) => i.status !== 'done').map((i) => norm(i.title)), ...openSuggestions().map((s) => norm(s.title))]);
+    const out = [];
+    list.forEach((s) => {
+      const n = norm(s.title);
+      if (!n || seen.has(n)) return;
+      if ([...seen].some((x) => x.length > 3 && n.length > 3 && (x.includes(n) || n.includes(x)))) return;
+      seen.add(n); out.push(s);
+    });
+    return out;
+  }
+  // 提案を AI提案リストに入れる（自動で移す設定なら、自分のリストへ）
+  function addSuggestions(list, meta) {
+    const fresh = dedupeSuggestions(list.map((s, k) => ({ ...s, _id: meta.idPrefix ? `${meta.idPrefix}:${k}` : uid() })));
+    const now = nowIso();
+    const made = fresh.map((s) => normAiSuggestion({ ...s, id: s._id, source: meta.source, ref: meta.ref || '', date: meta.date || todayStr(), status: 'open', createdAt: now, updatedAt: now }));
+    const newOnes = made.filter((s) => !state.aiSuggestions.some((x) => x.id === s.id) && !state.deleted[s.id]);
+    state.aiSuggestions.push(...newOnes);
+    return newOnes;
+  }
+  function autoMoveIfOn(list) {
+    if (!aiAutoMoveOn() || !list.length) return 0;
+    const ids = new Set(list.map((s) => s.id));
+    list = state.aiSuggestions.filter((s) => ids.has(s.id) && s.status === 'open');
+    if (!list.length) return 0;
+    const snap = snapshot(); // 元に戻すと「🤖 AI提案」に残る
+    list.forEach((s) => moveSuggestionData(s, true));
+    save(); rerenderSoft();
+    toast(`🤖 AIが ${list.length}件 を自分のリストに移しました`, { label: '元に戻す', run: () => restore(snap) });
+    return list.length;
+  }
+  async function runAnalysis(manual) {
+    if (anaUi.busy) return null;
+    if (!ai.key) { toast('Gemini の APIキーを設定すると、毎日の分析が使えます'); return null; }
+    const t = todayStr();
+    if (manual) {
+      if (manualLeft() <= 0) { toast(`「もう一度分析」は1日${AI_MANUAL_MAX}回までです。また明日！`); return null; }
+      if (aiDaily.runDate !== t) { aiDaily.runDate = t; aiDaily.runs = 0; }
+      aiDaily.runs++;
+    }
+    aiDaily.autoDate = t; saveAiDaily();
+    anaUi.busy = true; anaUi.error = ''; rerenderSoft();
+    try {
+      const text = await callGemini([{ role: 'user', parts: [{ text: '## 毎日の分析\n' + analysisContext() }] }], { system: ANALYSIS_SYSTEM, json: true, maxTokens: 2048, timeoutMs: 60000 });
+      const p = parseAnalysis(text);
+      const id = 'ana:' + t; const now = nowIso();
+      const prev = state.aiAnalyses.find((a) => a.id === id);
+      const added = addSuggestions(p.suggestions.slice(0, AI_SUG_MAX), { source: 'gemini', ref: id, date: t });
+      const rec = normAnalysis({ id, date: t, summary: p.summary, insights: p.insights, suggestionIds: added.map((s) => s.id), parsed: p.ok, model: ai.model, runs: (prev ? prev.runs : 0) + 1, createdAt: prev ? prev.createdAt : now, updatedAt: now });
+      state.aiAnalyses = [...state.aiAnalyses.filter((a) => a.id !== id), rec].sort((a, b) => b.date.localeCompare(a.date)).slice(0, AI_ANALYSIS_KEEP);
+      delete state.deleted[id];
+      anaUi.busy = false;
+      save();
+      if (!autoMoveIfOn(added)) { rerenderSoft(); toast(added.length ? `✨ 今日の分析ができました（AI提案 ${added.length}件）` : '✨ 今日の分析ができました'); }
+      return rec;
+    } catch (e) {
+      anaUi.busy = false; anaUi.error = e.message || String(e); rerenderSoft();
+      return null;
+    }
+  }
+  // 1日1回（その日に最初に開いたとき）。他の端末で今日の分析が済んでいれば行わない
+  async function maybeDailyAnalysis() {
+    const t = todayStr();
+    if (!ai.key || !aiDailyOn() || !navigator.onLine || aiDaily.autoDate === t || anaUi.busy) return false;
+    if (syncing) { try { await syncing; } catch (e) { /* noop */ } }
+    if (aiDaily.autoDate === t) return false;
+    if (state.aiAnalyses.some((a) => a.date === t)) { aiDaily.autoDate = t; saveAiDaily(); return false; }
+    await runAnalysis(false);
+    return true;
+  }
+  // 自分のリストへ（タスク・その象限・ステップつき。source 'ai'）
+  function moveSuggestionData(s, auto) {
+    const it = addItem({ title: s.title, list: 'task', quadrant: s.quadrant, importance: s.quadrant === 'q1' || s.quadrant === 'q2' ? 'high' : 'mid', notes: s.why ? `🤖 AI提案：${s.why}` : '🤖 AI提案から', steps: s.steps, source: 'ai', sourceKey: s.id });
+    s.status = 'moved'; s.itemId = it.id; s.auto = !!auto; s.updatedAt = nowIso();
+    return it;
+  }
+  function moveSuggestion(id) {
+    const s = state.aiSuggestions.find((x) => x.id === id);
+    if (!s || s.status !== 'open') return;
+    const snap = snapshot();
+    moveSuggestionData(s, false); save(); rerender();
+    toast(`→ 「${trunc(s.title, 18)}」を自分のリスト（${QUADRANTS[s.quadrant].label}）へ移しました`, { label: '元に戻す', run: () => restore(snap) });
+  }
+  function moveAllSuggestions() {
+    const list = openSuggestions();
+    if (!list.length) return;
+    const snap = snapshot();
+    list.forEach((s) => moveSuggestionData(s, false)); save(); rerender();
+    toast(`→ ${list.length}件 を自分のリストへ移しました`, { label: '元に戻す', run: () => restore(snap) });
+  }
+  function dismissSuggestion(id) {
+    const s = state.aiSuggestions.find((x) => x.id === id);
+    if (!s || s.status !== 'open') return;
+    const snap = snapshot();
+    s.status = 'dismissed'; s.updatedAt = nowIso(); save(); rerender();
+    toast('× 見送りました', { label: '元に戻す', run: () => restore(snap) });
+  }
+  function reopenSuggestion(id) {
+    const s = state.aiSuggestions.find((x) => x.id === id);
+    if (!s || s.status !== 'dismissed') return;
+    s.status = 'open'; s.updatedAt = nowIso(); save(); rerender(); toast('AI提案に戻しました');
+  }
+  function setSuggestionQuadrant(id, q) {
+    const s = state.aiSuggestions.find((x) => x.id === id);
+    if (!s || !QUADRANTS[q]) return;
+    s.quadrant = q; s.updatedAt = nowIso(); save(); rerender();
+  }
+  const SUG_SRC = { gemini: '✨ Gemini', coach: '💬 コーチ' };
+  function suggestionCard(s) {
+    return `<article class="card sug-card q-${s.quadrant}" data-sug="${s.id}">
+      <div class="sug-head"><h3 class="sug-title">${esc(s.title)}</h3><span class="chip src-chip">${SUG_SRC[s.source] || '🤖 AI'}</span></div>
+      <label class="sug-q"><span class="muted small">象限</span><select data-change="aiSugQuadrant" data-id="${s.id}" aria-label="象限">${options(Object.fromEntries(Object.entries(QUADRANTS).map(([k, v]) => [k, v.label])), s.quadrant)}</select></label>
+      ${s.why || s.steps.length ? `<details class="sug-more"><summary>${s.why ? esc(trunc(s.why, 46)) : 'くわしく'}${s.steps.length ? `<span class="muted small">・ステップ ${s.steps.length}</span>` : ''}</summary>
+        ${s.why ? `<p class="sug-why">${esc(s.why)}</p>` : ''}${s.steps.length ? `<ol class="sug-steps">${s.steps.map((x) => `<li>${esc(x)}</li>`).join('')}</ol>` : ''}</details>` : ''}
+      <div class="btn-row sug-actions"><button class="btn primary small" data-action="aiSugMove" data-id="${s.id}">→ 自分のリストへ</button><button class="icon-btn small" data-action="aiSugDismiss" data-id="${s.id}" aria-label="見送る（×）">×</button></div>
+    </article>`;
+  }
+  function analysisBody(a) {
+    return `<p class="ana-summary">${esc(a.summary)}</p>${a.insights.length ? `<ul class="ana-insights">${a.insights.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}`;
+  }
+  // ホームの「✨ 今日の分析」
+  function homeAnalysisCard() {
+    if (!ai.key && !state.aiAnalyses.length && !openSuggestions().length) return '';
+    const a = latestAnalysis(); const open = openSuggestions(); const t = todayStr();
+    const left = manualLeft();
+    const head = `<div class="card-head"><h2>✨ 今日の分析${a && a.date !== t ? `<span class="muted small"> ${fmtShort(a.date)}</span>` : ''}</h2>
+      <button class="icon-btn small" data-action="anaCollapse" aria-expanded="${!aiDaily.collapsed}" aria-label="${aiDaily.collapsed ? '開く' : 'たたむ'}">${aiDaily.collapsed ? '▾' : '▴'}</button></div>`;
+    const link = `<a class="btn soft small ana-link" href="#aisuggest">🤖 AI提案を見る（${open.length}件）</a>`;
+    if (aiDaily.collapsed) return `<section class="card ana-card collapsed" id="anaCard">${head}<div class="btn-row">${link}</div></section>`;
+    let body = '';
+    if (anaUi.busy) body = '<p class="ana-busy"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span> Gemini が分析しています…</p>';
+    else if (a) body = analysisBody(a) + (open.length ? `<ul class="ana-preview">${open.slice(0, 2).map((s) => `<li><span class="qdot ${s.quadrant}" aria-hidden="true"></span>${esc(s.title)}</li>`).join('')}${open.length > 2 ? `<li class="muted small">ほか ${open.length - 2}件</li>` : ''}</ul>` : '');
+    else body = `<p class="muted small">${ai.key ? (aiDailyOn() ? '今日の分析はまだです。' : '毎日の自動分析はオフです。') : 'Gemini の APIキーを設定すると、毎日の分析が届きます。'}</p>`;
+    if (anaUi.error) body += `<p class="error-text small">⚠️ ${esc(anaUi.error)}</p>`;
+    return `<section class="card ana-card" id="anaCard">${head}${body}
+      <div class="btn-row">${link}${ai.key ? `<button class="btn ghost small" data-action="anaRerun" ${anaUi.busy || left <= 0 ? 'disabled' : ''}>🔁 もう一度分析<span class="muted small">（あと${Math.max(0, left)}回）</span></button>` : ''}</div>
+    </section>`;
+  }
+  // 画面：🤖 AI提案
+  function viewAiSuggest() {
+    const open = openSuggestions().sort((a, b) => b.date.localeCompare(a.date) || (a.createdAt || '').localeCompare(b.createdAt || ''));
+    const out = [sectionHead('🤖 AI提案', `${open.length}件・自分のリストとは別です`, open.length > 1 ? '<button class="btn soft small" data-action="aiSugMoveAll">すべて移動</button>' : '')];
+    out.push('<p class="muted small sug-lead">Gemini の毎日の分析と、コーチからの提案がここに届きます。「→ 自分のリストへ」を押したものだけが、あなたのタスク（選んだ象限・ステップつき）になります。</p>');
+    const a = latestAnalysis();
+    if (a) out.push(`<section class="card ana-mini"><div class="card-head"><h2>✨ ${a.date === todayStr() ? '今日' : fmtShort(a.date)}の分析</h2></div>${analysisBody(a)}</section>`);
+    if (!open.length) out.push(emptyState('いまAI提案はありません', ai.key ? '毎日の分析やコーチからの提案が届くと、ここに並びます。' : '設定で Gemini の APIキーを登録すると、毎日の分析とタスクの提案が届きます。', ai.key ? `<button class="btn soft" data-action="anaRerun" ${manualLeft() <= 0 || anaUi.busy ? 'disabled' : ''}>✨ 分析する</button>` : '<a class="btn soft" href="#settings/ai">設定を開く</a>'));
+    const byDate = new Map();
+    open.forEach((s) => { if (!byDate.has(s.date)) byDate.set(s.date, []); byDate.get(s.date).push(s); });
+    byDate.forEach((list, d) => out.push(`<h3 class="month-head">${fmtDate(d)}<span class="muted small">（${list.length}件）</span></h3>${list.map(suggestionCard).join('')}`));
+    const past = state.aiSuggestions.filter((s) => s.status !== 'open').sort((x, y) => (y.updatedAt || '').localeCompare(x.updatedAt || '')).slice(0, 15);
+    if (past.length) {
+      out.push(`<details class="card sug-past"><summary>これまでの提案（${past.length}件）</summary><ul class="plain-list">${past.map((s) => `<li class="sug-past-row"><span class="chip ${s.status === 'moved' ? 'sync-ok' : ''}">${s.status === 'moved' ? (s.auto ? 'AIが移動' : '移動済み') : '見送り'}</span><span class="grow">${esc(s.title)}</span>${s.status === 'moved' && getItem(s.itemId) ? `<a class="link small" href="#item/${s.itemId}">開く</a>` : ''}${s.status === 'dismissed' ? `<button class="btn ghost small" data-action="aiSugReopen" data-id="${s.id}">戻す</button>` : ''}</li>`).join('')}</ul></details>`);
+    }
+    return out.join('');
+  }
+  // 設定（AI連携カードの下）
+  function aiDailySettings() {
+    return `<div class="ai-daily-set">
+      <label class="check-line"><input type="checkbox" data-change="aiDaily" ${aiDailyOn() ? 'checked' : ''}> 毎日の自動分析<span class="muted small">（その日はじめて開いたときに1回）</span></label>
+      <label class="check-line"><input type="checkbox" data-change="aiAutoMove" ${aiAutoMoveOn() ? 'checked' : ''}> AI提案を自動で自分のリストに移す<span class="muted small">（オフなら「🤖 AI提案」に並ぶだけ）</span></label>
+    </div>`;
+  }
+  // コーチ受信箱の taskSuggestions（note の id から決まる id なので、どの端末で取り込んでも同じ）
+  function ingestCoachTaskSuggestions(noteId, list, date) {
+    const norm1 = (Array.isArray(list) ? list : []).map((x) => normSuggestion(x)).filter(Boolean).slice(0, 10);
+    return addSuggestions(norm1, { source: 'coach', ref: noteId, date, idPrefix: 'sug:' + noteId });
+  }
+
   // ───────────────────────── アクション ─────────────────────────
   function stepOf(d) { const i = getItem(d.id); return i ? [i, i.steps.find((s) => s.id === d.step)] : [null, null]; }
   const actions = {
@@ -3063,6 +3353,12 @@
     toggleJDay: (d, el) => toggleJournalDay(d.date, el),
     viewPhoto: (d) => viewPhoto(d.photoId, d.entry),
     removeEditorPhoto: (d) => removeEditorPhoto(d.photoId),
+    aiSugMove: (d) => moveSuggestion(d.id),
+    aiSugDismiss: (d) => dismissSuggestion(d.id),
+    aiSugReopen: (d) => reopenSuggestion(d.id),
+    aiSugMoveAll: () => moveAllSuggestions(),
+    anaRerun: () => runAnalysis(true),
+    anaCollapse: () => { aiDaily.collapsed = !aiDaily.collapsed; saveAiDaily(); rerender(); },
     habitMonth: (d) => {
       const h = getHabit(d.id); if (!h) return;
       const cur = todayStr().slice(0, 7); const base = ui.habitMonth[h.id] || cur;
@@ -3166,6 +3462,9 @@
       case 'journalPhoto': if (el.files && el.files.length) startPhotoQueue(el.files); break;
       case 'journalEntryPhoto': if (el.files && el.files.length) { const fs = [...el.files]; el.value = ''; addEditorPhotos(fs); } break;
       case 'obsidianFiles': if (el.files && el.files.length) importObsidianFiles(el.files); break;
+      case 'aiSugQuadrant': setSuggestionQuadrant(d.id, el.value); break;
+      case 'aiDaily': ai.daily = el.checked; saveAi(); toast(el.checked ? '毎日の自動分析をオンにしました' : '毎日の自動分析をオフにしました'); if (el.checked) maybeDailyAnalysis(); break;
+      case 'aiAutoMove': ai.autoMove = el.checked; saveAi(); toast(el.checked ? 'AI提案を自動で自分のリストに移します' : 'AI提案は「🤖 AI提案」に並べるだけにします'); break;
       case 'aiShare': ai.share = el.checked; saveAi(); toast(ai.share ? 'タスクとジャーナルの要約を共有します' : 'データを共有せずに相談します'); rerender(); break;
       case 'syncAuto': sync.auto = el.checked; saveSync(); if (sync.auto) syncNow(); setSyncState(syncState); toast(sync.auto ? '自動同期をオンにしました' : '自動同期をオフにしました'); break;
       default: break;
@@ -3304,7 +3603,9 @@
   setTimeout(() => photoGc(), 5000);
   setSyncState(syncState);
   if (sync.connected && sync.auto) syncNow();
+  setTimeout(() => maybeDailyAnalysis(), 1200);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') setTimeout(() => maybeDailyAnalysis(), 800); });
 
   // テスト・デバッグ用（読み取りのみ）
-  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, pomu: (h, today) => { const i = pomuInfo(normHabit(h), today); return { key: i.key, name: i.name, route: i.route, lv: i.lv, total: i.total, M: i.M, streak: i.streak, best: i.best, hints: i.hints }; }, pomuChangeMsg, syncNow: () => syncNow(), topPomu: () => { const p = topPomu(); return { key: p.key, lv: p.lv, id: p.h ? p.h.id : '' }; }, photoIds: async () => (await photoAll()).map((r) => r.id).sort(), photoInfo: async (id) => { const r = await photoGet(id); return r ? { id: r.id, bytes: r.full.byteLength, synced: !!r.synced } : null; }, syncPhotos: () => syncPhotos(), photoGc: () => photoGc(), photoDims: async (id) => { const r = await photoGet(id); if (!r) return null; const b = await createImageBitmap(new Blob([r.full], { type: 'image/jpeg' })); return [b.width, b.height, r.full.byteLength]; } };
+  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, pomu: (h, today) => { const i = pomuInfo(normHabit(h), today); return { key: i.key, name: i.name, route: i.route, lv: i.lv, total: i.total, M: i.M, streak: i.streak, best: i.best, hints: i.hints }; }, pomuChangeMsg, syncNow: () => syncNow(), topPomu: () => { const p = topPomu(); return { key: p.key, lv: p.lv, id: p.h ? p.h.id : '' }; }, photoIds: async () => (await photoAll()).map((r) => r.id).sort(), photoInfo: async (id) => { const r = await photoGet(id); return r ? { id: r.id, bytes: r.full.byteLength, synced: !!r.synced } : null; }, syncPhotos: () => syncPhotos(), photoGc: () => photoGc(), aiDaily: () => ({ ...aiDaily, manualLeft: manualLeft(), busy: anaUi.busy, error: anaUi.error, daily: aiDailyOn(), autoMove: aiAutoMoveOn() }), parseAnalysis, maybeDailyAnalysis: () => maybeDailyAnalysis(), runAnalysis: () => runAnalysis(true), photoDims: async (id) => { const r = await photoGet(id); if (!r) return null; const b = await createImageBitmap(new Blob([r.full], { type: 'image/jpeg' })); return [b.width, b.height, r.full.byteLength]; } };
 })();

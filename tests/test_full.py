@@ -82,11 +82,21 @@ gh = FakeGH()
 
 # ── 偽の Gemini API（generativelanguage.googleapis.com）──
 GKEY = 'AIzaTEST_fake_key_123'
+ANA_JSON = {'summary': '英会話が2週間止まっています。今週は小さく再開するのが良さそうです。習慣スタンプは順調です。',
+            'insights': ['「緊急かつ重要」が3件たまっています', '日記は5日連続でついています', '英会話のステップが止まっています', '4つ目は表示されない'],
+            'taskSuggestions': [
+                {'title': '英会話の体験レッスン', 'quadrant': 'q2', 'why': '既存と重複', 'steps': ['x']},
+                {'title': 'オンライン英会話の無料体験を予約する', 'quadrant': 'q2', 'why': '止まっている英会話を、まず15分の体験で再開するため。', 'steps': ['サービスを2つ比べる', '体験枠を予約する', '前日にアプリを入れる']},
+                {'title': 'パスポートの写真を撮る', 'quadrant': 'q9', 'why': '申請の前準備として。', 'steps': ['証明写真機の場所を調べる']},
+                {'title': '4件目は入らない', 'quadrant': 'q4', 'why': '', 'steps': []}]}
 class FakeGemini:
     def __init__(self):
         self.reqs = []   # (url, headers, body)
         self.mode = 'ok'
         self.images = []
+        self.ana_reqs = []
+        self.ana_mode = 'json'
+        self.ana_json = ANA_JSON
     def handle(self, route, request):
         cors = {'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': 'POST,OPTIONS', 'Content-Type': 'application/json'}
         if request.method == 'OPTIONS':
@@ -109,6 +119,16 @@ class FakeGemini:
                    'quadrantHints': {'q1': ['パスポート申請', 'ICL予約する'], 'q2': ['英会話を続ける'], 'q3': ['メール返信'], 'q4': []}}
             return route.fulfill(status=200, headers=cors, body=json.dumps({'candidates': [{'content': {'parts': [{'text': json.dumps(out, ensure_ascii=False)}], 'role': 'model'}, 'finishReason': 'STOP'}]}, ensure_ascii=False))
         last = next(x['text'] for x in parts if 'text' in x)
+        if '## 毎日の分析' in last:
+            self.ana_reqs.append(body)
+            obj = self.ana_json
+            if self.ana_mode == 'garbage':
+                text = 'すみません、今日はうまく整理できませんでした。英会話を少しだけ進めましょう。'
+            elif self.ana_mode == 'fenced':
+                text = '分析結果です：\n```json\n' + json.dumps(obj, ensure_ascii=False) + '\n```'
+            else:
+                text = json.dumps(obj, ensure_ascii=False)
+            return route.fulfill(status=200, headers=cors, body=json.dumps({'candidates': [{'content': {'parts': [{'text': text}], 'role': 'model'}, 'finishReason': 'STOP'}], 'modelVersion': 'gemini-2.5-flash'}, ensure_ascii=False))
         if 'ステップに分けて' in last:
             m = re.search(r'「(.+?)」', last); title = m.group(1) if m else 'AIで新しく作るタスク'
             text = f'いいですね！「{title}」を小さく分けてみましょう。\n\n- **まず5分**：情報を1つ集める\n- 次に予定を決める\n\n```json\n' + json.dumps({'taskTitle': title, 'steps': ['候補を3つ書き出す', '1つに決めて予約する', '前日に持ち物を準備する']}, ensure_ascii=False) + '\n```'
@@ -642,7 +662,7 @@ with sync_playwright() as p:
     check('v2：タブにない画面ではインジケーターを隠す', ind()[2] if pg.locator('.tabbar a.active').count() == 0 or not pg.evaluate("document.querySelector('.tabbar a.active').offsetParent") else True)
     # ドロワー
     pg.click('#menuBtn'); wait_idle(pg, 550)
-    check('v2：ドロワーを開く', pg.evaluate("document.body.classList.contains('drawer-open')") and pg.locator('#drawer .drawer-nav a').count() == 11 and pg.get_attribute('#menuBtn', 'aria-expanded') == 'true')
+    check('v2：ドロワーを開く', pg.evaluate("document.body.classList.contains('drawer-open')") and pg.locator('#drawer .drawer-nav a').count() == 12 and pg.get_attribute('#menuBtn', 'aria-expanded') == 'true')
     check('v2：ドロワーで現在地を表示', pg.locator('#drawer a.active[data-nav=later]').count() == 1)
     shot(pg, 'sp_drawer_v2.png')
     pg.click('#drawer a[data-nav=lessons]'); wait_idle(pg, 550)
@@ -676,7 +696,7 @@ with sync_playwright() as p:
     def dd(n): return (TD - datetime.timedelta(days=n)).isoformat()
     def pomu(done, start, today=None):
         return pg.evaluate("([d, s, t]) => LifePlan.pomu({id: 'x', name: 't', startDate: s, done: d}, t)", [done, start, today or TD.isoformat()])
-    check('習慣：バージョン 1.3.2', S(pg, 'LifePlan.version') == '1.3.2')
+    check('バージョン 1.4.0', S(pg, 'LifePlan.version') == '1.4.0')
     check('習慣：state.habits が配列', S(pg, 'Array.isArray(LifePlan.state.habits)'))
     # ぽむのルール
     r = pomu([], dd(0)); check('ぽむ：0日はたまご（stage-1）', r['key'] == 'stage-1' and r['lv'] == 1, r)
@@ -963,7 +983,7 @@ with sync_playwright() as p:
     db = pg.locator('#drawer').bounding_box()
     check('スワイプ：右から左へなぞるとメニューが開く', is_open() and pg.is_visible('#drawerBackdrop'))
     check('スワイプ：メニューは右側から出る', db and abs(db['x'] + db['width'] - 390) <= 2 and db['x'] > 30, db)
-    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.3.2' in pg.inner_text('#drawer [data-action=forceUpdate]'))
+    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.4.0' in pg.inner_text('#drawer [data-action=forceUpdate]'))
     shot(pg, 'v131_menu.png')
     swipe(90, 500, 330, 505)
     check('スワイプ：左から右へで閉じる', not is_open())
@@ -1105,6 +1125,175 @@ with sync_playwright() as p:
     check('写真：古いジャーナルは photos が空配列', S(pg, "LifePlan.state.journal.every(e => Array.isArray(e.photos))"))
     # ホームの最近のジャーナルもそのまま
     pg.evaluate("location.hash = '#home'"); wait_idle(pg, 500)
+    # ── v1.4.0：Gemini の毎日の分析・🤖 AI提案（別画面）──
+    ac = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2, locale='ja-JP', timezone_id='Asia/Tokyo', service_workers='block')
+    ac.route('https://generativelanguage.googleapis.com/**', gem.handle)
+    ap = ac.new_page(); ap.on('pageerror', lambda e: errors.append('ANA ' + str(e)))
+    ap.goto(URL); wait_idle(ap, 500)
+    seed = {'items': [
+        {'id': 'eng', 'list': 'task', 'title': '英会話の体験レッスン', 'quadrant': 'q2', 'status': 'doing', 'steps': [{'text': '候補を探す'}], 'createdAt': '2026-10-01T00:00:00.000Z', 'updatedAt': '2026-10-01T00:00:00.000Z', 'lastProgressAt': '2026-10-01T00:00:00.000Z'},
+        {'id': 'pp', 'list': 'task', 'title': 'パスポート申請', 'quadrant': 'q1', 'createdAt': now, 'updatedAt': now}],
+        'journal': [{'id': 'j1', 'date': TD.isoformat(), 'text': '今日は英会話のことを考えた。テスト用の日記。', 'mood': 4, 'createdAt': now, 'updatedAt': now}],
+        'habits': [{'id': 'hd', 'name': '日記を書く', 'emoji': '✍️', 'startDate': dd(1) if TD.day > 1 else TD.isoformat(), 'done': [TD.isoformat()], 'createdAt': now, 'updatedAt': now}],
+        'lessons': [{'id': 'l1', 'name': 'ピアノ', 'status': 'active', 'createdAt': now, 'updatedAt': now}]}
+    ap.evaluate(f"localStorage.setItem('lifeplan.v1', JSON.stringify({json.dumps(seed, ensure_ascii=False)}))")
+    # 毎日の自動分析：オフなら呼ばない
+    ap.evaluate(f"localStorage.setItem('lifeplan.ai', JSON.stringify({{key: '{GKEY}', model: 'gemini-2.5-flash', share: true, mv: 2, daily: false}}))")
+    gem.ana_mode = 'json'; gem.ana_json = ANA_JSON
+    na = len(gem.ana_reqs)
+    ap.reload(); wait_idle(ap, 2200)
+    check('分析：自動分析オフなら呼ばない', len(gem.ana_reqs) == na and S(ap, 'LifePlan.state.aiAnalyses.length') == 0)
+    check('分析：ホームに案内カード', ap.locator('#anaCard').count() == 1 and '自動分析はオフ' in ap.inner_text('#anaCard'))
+    # 設定でオン → その場で分析
+    ap.evaluate("location.hash = '#settings'"); wait_idle(ap, 500)
+    check('設定：「毎日の自動分析」「AI提案を自動で自分のリストに移す」', ap.locator('[data-change=aiDaily]').count() == 1 and ap.locator('[data-change=aiAutoMove]').count() == 1
+          and not ap.locator('[data-change=aiDaily]').is_checked() and not ap.locator('[data-change=aiAutoMove]').is_checked() and 'AI提案を自動で自分のリストに移す' in ap.inner_text('.ai-daily-set'))
+    ap.locator('[data-change=aiDaily]').check(); wait_js(ap, "LifePlan.state.aiAnalyses.length === 1", 8000)
+    check('設定：オンにすると分析が走る', len(gem.ana_reqs) == na + 1 and json.loads(ap.evaluate("localStorage.getItem('lifeplan.ai')"))['daily'] is True)
+    rq = gem.reqs[-1]; body = gem.ana_reqs[-1]; sent = json.dumps(body, ensure_ascii=False)
+    check('分析：キーはヘッダーのみ（Google の API だけ）', rq[1].get('x-goog-api-key') == GKEY and GKEY not in sent and GKEY not in rq[0] and rq[0].startswith('https://generativelanguage.googleapis.com/'))
+    check('分析：要約を送る（タスク・日記・習慣・習い事）', all(w in sent for w in ['英会話の体験レッスン', 'テスト用の日記', '日記を書く', 'ピアノ']) and 'inline_data' not in sent and 'inlineData' not in sent)
+    check('分析：JSON 指定・thinking low', body.get('generationConfig', {}).get('responseMimeType') == 'application/json' and 'low' in json.dumps(body.get('generationConfig', {})).lower(), json.dumps(body.get('generationConfig', {}))[:200])
+    check('分析：送る量は控えめ（6000字以下）', len(body['contents'][-1]['parts'][0]['text']) < 6000)
+    an = S(ap, 'LifePlan.state.aiAnalyses[0]')
+    check('分析：1日1件の記録（id=ana:日付）', an['id'] == 'ana:' + TD.isoformat() and an['parsed'] is True and len(an['insights']) == 3)
+    sg = S(ap, 'LifePlan.state.aiSuggestions')
+    check('AI提案：最大3件＋既存タスクと重複しない', len(sg) == 2 and all(s['title'] != '英会話の体験レッスン' for s in sg) and all(s['title'] != '4件目は入らない' for s in sg), [s['title'] for s in sg])
+    check('AI提案：不正な象限は q2', next(s for s in sg if s['title'] == 'パスポートの写真を撮る')['quadrant'] == 'q2')
+    check('AI提案：自分のタスクには入らない', S(ap, 'LifePlan.state.items.length') == 2 and all(s['status'] == 'open' and s['source'] == 'gemini' for s in sg))
+    ap.evaluate("location.hash = '#home'"); wait_idle(ap, 500)
+    hc = ap.inner_text('#anaCard')
+    check('ホーム：要約・気づき・プレビュー・「AI提案を見る（2件）」', '英会話が2週間止まっています' in hc and ap.locator('#anaCard .ana-insights li').count() == 3 and ap.locator('#anaCard .ana-preview li').count() == 2 and 'AI提案を見る（2件）' in hc)
+    check('ホーム：追加ボタンは置かない', ap.locator('#anaCard [data-action=aiSugMove]').count() == 0 and ap.locator('#anaCard [data-action=aiSugMoveAll]').count() == 0)
+    check('ホーム：もう一度分析（あと3回）', 'あと3回' in ap.inner_text('#anaCard [data-action=anaRerun]'))
+    ap.evaluate('window.scrollTo(0,0)'); wait_idle(ap, 200)
+    shot(ap, 'v140_home_analysis.png')
+    # 1日1回：開き直しても呼ばない
+    ap.reload(); wait_idle(ap, 2200)
+    check('分析：同じ日に開き直しても再分析しない', len(gem.ana_reqs) == na + 1 and S(ap, 'LifePlan.aiDaily().autoDate') == TD.isoformat())
+    ap.evaluate("document.dispatchEvent(new Event('visibilitychange'))"); wait_idle(ap, 1200)
+    check('分析：画面に戻っても再分析しない', len(gem.ana_reqs) == na + 1)
+    # たたむ
+    ap.click('[data-action=anaCollapse]'); wait_idle(ap, 200)
+    check('ホーム：分析カードをたためる', ap.locator('#anaCard.collapsed').count() == 1 and ap.locator('#anaCard .ana-summary').count() == 0 and ap.locator('#anaCard .ana-link').count() == 1)
+    ap.reload(); wait_idle(ap, 600)
+    check('ホーム：たたんだ状態を覚える', ap.locator('#anaCard.collapsed').count() == 1)
+    ap.click('[data-action=anaCollapse]'); wait_idle(ap, 200)
+    # 解析：コードフェンス・壊れた応答
+    pf = ap.evaluate("LifePlan.parseAnalysis('はい\\n```json\\n' + JSON.stringify({summary: 'S', insights: ['a'], taskSuggestions: [{title: 'T', quadrant: 'q3', steps: ['s1']}]}) + '\\n```')")
+    check('解析：コードフェンス付き JSON', pf['ok'] and pf['summary'] == 'S' and pf['suggestions'][0]['quadrant'] == 'q3' and pf['suggestions'][0]['steps'] == ['s1'], pf)
+    pgb = ap.evaluate("LifePlan.parseAnalysis('ただの文章です。JSONではありません')")
+    check('解析：壊れた応答は要約だけ', not pgb['ok'] and 'ただの文章' in pgb['summary'] and pgb['suggestions'] == [], pgb)
+    # もう一度分析（1日3回まで）：壊れた応答 → 要約だけ表示
+    gem.ana_mode = 'garbage'
+    ap.click('#anaCard [data-action=anaRerun]'); wait_js(ap, "!LifePlan.aiDaily().busy && LifePlan.aiDaily().manualLeft === 2", 8000); wait_idle(ap, 300)
+    check('もう一度分析：壊れた応答でも落ちず要約を表示', 'うまく整理できませんでした' in ap.inner_text('#anaCard') and S(ap, 'LifePlan.state.aiAnalyses.length') == 1 and S(ap, 'LifePlan.state.aiAnalyses[0].runs') == 2)
+    check('もう一度分析：提案は消えない', S(ap, "LifePlan.state.aiSuggestions.filter(s => s.status === 'open').length") == 2)
+    gem.ana_mode = 'fenced'
+    ap.click('#anaCard [data-action=anaRerun]'); wait_js(ap, "!LifePlan.aiDaily().busy && LifePlan.aiDaily().manualLeft === 1", 8000); wait_idle(ap, 300)
+    check('もう一度分析：フェンス付き JSON も読める・提案は重複しない', '英会話が2週間止まっています' in ap.inner_text('#anaCard') and S(ap, 'LifePlan.state.aiSuggestions.length') == 2)
+    ap.click('#anaCard [data-action=anaRerun]'); wait_js(ap, "!LifePlan.aiDaily().busy && LifePlan.aiDaily().manualLeft === 0", 8000); wait_idle(ap, 300)
+    n3 = len(gem.ana_reqs)
+    check('もう一度分析：3回使うとボタンが押せない', ap.locator('#anaCard [data-action=anaRerun]').is_disabled() and 'あと0回' in ap.inner_text('#anaCard'))
+    ap.evaluate('LifePlan.runAnalysis()'); wait_idle(ap, 500)
+    check('もう一度分析：4回目は呼ばない', len(gem.ana_reqs) == n3 and '3回まで' in ap.inner_text('#toast'))
+    # 🤖 AI提案の画面
+    ap.evaluate("location.hash = '#home'"); wait_idle(ap, 300)
+    ap.click('#anaCard .ana-link'); wait_idle(ap, 500)
+    check('AI提案：ホームからリンクで開く', S(ap, 'location.hash') == '#aisuggest' and ap.locator('.sug-card').count() == 2 and '🤖 AI提案' in ap.inner_text('#main'))
+    ap.click('#menuBtn'); wait_idle(ap, 400)
+    check('メニュー：AI提案（件数バッジ）', ap.locator('#drawer a[href="#aisuggest"]').count() == 1 and ap.inner_text('#drawer a[href="#aisuggest"] .sug-badge') == '2')
+    ap.mouse.click(20, 400); wait_idle(ap, 500)
+    check('メニュー：閉じる', not ap.evaluate("document.body.classList.contains('drawer-open')"))
+    sid = next(s['id'] for s in S(ap, 'LifePlan.state.aiSuggestions') if s['title'].startswith('オンライン英会話'))
+    card = ap.locator(f'.sug-card[data-sug="{sid}"]')
+    card.locator('details.sug-more summary').click(); wait_idle(ap, 200)
+    check('AI提案：理由とステップを開ける', '15分の体験' in card.inner_text() and card.locator('.sug-steps li').count() == 3)
+    ap.evaluate('window.scrollTo(0,0)'); shot(ap, 'v140_ai_screen.png')
+    # 象限を変えてから移す
+    card.locator('select[data-change=aiSugQuadrant]').select_option('q1'); wait_idle(ap, 300)
+    check('AI提案：移す前に象限を変えられる', S(ap, f"LifePlan.state.aiSuggestions.find(s => s.id === '{sid}').quadrant") == 'q1')
+    ap.click(f'.sug-card[data-sug="{sid}"] [data-action=aiSugMove]'); wait_idle(ap, 400)
+    it = S(ap, "LifePlan.state.items.find(i => i.title === 'オンライン英会話の無料体験を予約する')")
+    check('→ 自分のリストへ：タスク（象限・ステップ・AI由来）', it and it['list'] == 'task' and it['quadrant'] == 'q1' and [x['text'] for x in it['steps']] == ['サービスを2つ比べる', '体験枠を予約する', '前日にアプリを入れる'] and it['source'] == 'ai' and it['sourceKey'] == sid, it)
+    check('→ 自分のリストへ：提案は「移動済み」', S(ap, f"LifePlan.state.aiSuggestions.find(s => s.id === '{sid}').status") == 'moved' and ap.locator(f'.sug-card[data-sug="{sid}"]').count() == 0)
+    ap.click('#toast .toast-btn'); wait_idle(ap, 400)
+    check('→ 自分のリストへ：元に戻せる', not S(ap, "LifePlan.state.items.some(i => i.title === 'オンライン英会話の無料体験を予約する')") and S(ap, f"LifePlan.state.aiSuggestions.find(s => s.id === '{sid}').status") == 'open')
+    ap.click(f'.sug-card[data-sug="{sid}"] [data-action=aiSugMove]'); wait_idle(ap, 400)
+    ap.evaluate(f"location.hash = '#item/' + LifePlan.state.items.find(i => i.sourceKey === '{sid}').id"); wait_idle(ap, 400)
+    check('移したタスク：「🤖 AI提案から」', 'AI提案から' in ap.inner_text('#main'))
+    ap.evaluate("location.hash = '#aisuggest'"); wait_idle(ap, 400)
+    pid2 = next(s['id'] for s in S(ap, 'LifePlan.state.aiSuggestions') if s['title'] == 'パスポートの写真を撮る')
+    ap.click(f'.sug-card[data-sug="{pid2}"] [data-action=aiSugDismiss]'); wait_idle(ap, 400)
+    check('× 見送り', S(ap, f"LifePlan.state.aiSuggestions.find(s => s.id === '{pid2}').status") == 'dismissed' and ap.locator('.sug-card').count() == 0 and S(ap, 'LifePlan.state.items.length') == 3)
+    ap.click('#toast .toast-btn'); wait_idle(ap, 400)
+    check('× 見送り：元に戻せる', S(ap, f"LifePlan.state.aiSuggestions.find(s => s.id === '{pid2}').status") == 'open' and ap.locator('.sug-card').count() == 1)
+    ap.click(f'.sug-card[data-sug="{pid2}"] [data-action=aiSugDismiss]'); wait_idle(ap, 400)
+    check('これまでの提案（移動済み・見送り）', '移動済み' in ap.text_content('.sug-past') and '見送り' in ap.text_content('.sug-past'))
+    ap.click('.sug-past summary'); ap.click(f'.sug-past [data-action=aiSugReopen][data-id="{pid2}"]'); wait_idle(ap, 400)
+    check('見送りを戻せる', ap.locator('.sug-card').count() == 1)
+    # すべて移動
+    ap.evaluate("(() => { const s = LifePlan.state.aiSuggestions; s.push({...s[0], id: 'extra1', title: '追加の提案', status: 'open', quadrant: 'q3', steps: []}); localStorage.setItem('lifeplan.v1', JSON.stringify(LifePlan.state)); })()"); ap.reload(); wait_idle(ap, 600)
+    ap.click('[data-action=aiSugMoveAll]'); wait_idle(ap, 400)
+    check('すべて移動', S(ap, "LifePlan.state.aiSuggestions.filter(s => s.status === 'open').length") == 0 and S(ap, "LifePlan.state.items.filter(i => i.source === 'ai').length") == 3 and S(ap, "LifePlan.state.items.find(i => i.title === '追加の提案').quadrant") == 'q3')
+    ap.click('#toast .toast-btn'); wait_idle(ap, 400)
+    check('すべて移動：元に戻せる', S(ap, "LifePlan.state.items.filter(i => i.source === 'ai').length") == 1 and S(ap, "LifePlan.state.aiSuggestions.filter(s => s.status === 'open').length") == 2)
+    ac.close()
+
+    # 自動で自分のリストに移す（オン → 元に戻す／オフ）
+    xc = browser.new_context(viewport={'width': 390, 'height': 844}, locale='ja-JP', timezone_id='Asia/Tokyo', service_workers='block')
+    xc.route('https://generativelanguage.googleapis.com/**', gem.handle)
+    xp = xc.new_page(); xp.on('pageerror', lambda e: errors.append('AUTO ' + str(e)))
+    xp.goto(URL); wait_idle(xp, 400)
+    xp.evaluate(f"localStorage.setItem('lifeplan.v1', JSON.stringify({json.dumps(seed, ensure_ascii=False)}))")
+    xp.evaluate(f"localStorage.setItem('lifeplan.ai', JSON.stringify({{key: '{GKEY}', model: 'gemini-2.5-flash', share: true, mv: 2, autoMove: true}}))")
+    gem.ana_mode = 'json'; na = len(gem.ana_reqs)
+    xp.reload(); wait_js(xp, "LifePlan.state.aiAnalyses.length === 1 && LifePlan.state.items.length === 4", 8000); wait_idle(xp, 300)
+    check('自動移動オン：毎日の分析（初回起動で1回）', len(gem.ana_reqs) == na + 1)
+    check('自動移動オン：提案が自分のリストへ（象限・ステップ）', S(xp, "LifePlan.state.items.filter(i => i.source === 'ai').length") == 2 and S(xp, "LifePlan.state.aiSuggestions.every(s => s.status === 'moved' && s.auto)")
+          and S(xp, "LifePlan.state.items.find(i => i.title === 'パスポートの写真を撮る').steps.length") == 1)
+    check('自動移動オン：お知らせ＋元に戻す', 'AIが 2件 を自分のリストに移しました' in xp.inner_text('#toast'))
+    xp.click('#toast .toast-btn'); wait_idle(xp, 400)
+    check('自動移動：元に戻すとAI提案に残る', S(xp, "LifePlan.state.items.filter(i => i.source === 'ai').length") == 0 and S(xp, "LifePlan.state.aiSuggestions.filter(s => s.status === 'open').length") == 2 and S(xp, 'LifePlan.state.aiAnalyses.length') == 1)
+    xp.evaluate("location.hash = '#settings'"); wait_idle(xp, 400)
+    check('設定：自動移動オンが表示される', xp.locator('[data-change=aiAutoMove]').is_checked())
+    xp.locator('[data-change=aiAutoMove]').uncheck(); wait_idle(xp, 300)
+    check('設定：自動移動オフを保存', json.loads(xp.evaluate("localStorage.getItem('lifeplan.ai')"))['autoMove'] is False)
+    xp.evaluate("(() => { const d = JSON.parse(localStorage.getItem('lifeplan.aiDaily')); d.runs = 0; localStorage.setItem('lifeplan.aiDaily', JSON.stringify(d)); })()")
+    gem.ana_json = {'summary': '別の日の分析', 'insights': [], 'taskSuggestions': [{'title': '歯医者に電話する', 'quadrant': 'q1', 'why': '', 'steps': []}]}
+    xp.reload(); wait_idle(xp, 500); xp.evaluate("location.hash = '#home'"); wait_idle(xp, 300)
+    xp.click('#anaCard [data-action=anaRerun]'); wait_js(xp, "LifePlan.state.aiSuggestions.length === 3", 8000); wait_idle(xp, 300)
+    check('自動移動オフ：AI提案に並ぶだけ', S(xp, "LifePlan.state.items.filter(i => i.source === 'ai').length") == 0 and S(xp, "LifePlan.state.aiSuggestions.find(s => s.title === '歯医者に電話する').status") == 'open')
+    gem.ana_json = ANA_JSON
+    xc.close()
+
+    # コーチ受信箱の taskSuggestions（同期で取り込み → AI提案へ）
+    inbox2 = json.loads(gh.files['data/coach-inbox.json'][0])
+    inbox2['messages'].append({'id': '2026-11-02-t', 'date': TD.isoformat(), 'title': '今週の提案', 'text': '止まっているものを小さく動かしましょう。',
+        'taskSuggestions': [{'title': '区役所の受付時間を調べる', 'quadrant': 'q1', 'why': 'パスポート申請の前に。', 'steps': ['サイトを見る', 'カレンダーに入れる']},
+                            {'title': '本棚を片付ける', 'quadrant': 'q4', 'why': '気分転換に。', 'steps': []}]})
+    inbox2['messages'].append({'id': '2026-11-02-u', 'date': TD.isoformat(), 'taskSuggestions': [{'title': '週末の散歩コースを決める', 'quadrant': 'q2', 'why': '', 'steps': ['地図を見る']}]})
+    gh.set('data/coach-inbox.json', json.dumps(inbox2, ensure_ascii=False))
+    nit = S(pg, 'LifePlan.state.items.length')
+    pg.evaluate("location.hash = '#home'"); pg.evaluate('LifePlan.syncNow()'); wait_js(pg, "LifePlan.state.aiSuggestions.filter(s => s.source === 'coach').length === 3", 10000); wait_idle(pg, 500)
+    cs = S(pg, "LifePlan.state.aiSuggestions.filter(s => s.source === 'coach')")
+    check('コーチ：taskSuggestions は AI提案へ（自分のタスクには入らない）', len(cs) == 3 and S(pg, 'LifePlan.state.items.length') == nit and all(s['status'] == 'open' for s in cs))
+    check('コーチ：id は決まった形（端末間で同じ）', all(s['id'].startswith('sug:coach:') for s in cs) and any(s['id'] == 'sug:coach:2026-11-02-t:0' for s in cs), [s['id'] for s in cs])
+    check('コーチ：taskSuggestions だけのメッセージも受け取る', S(pg, "LifePlan.state.coachNotes.find(c => c.id === 'coach:2026-11-02-u').title") == 'タスクの提案')
+    check('コーチ：アドバイスに「AI提案に n件」', pg.locator('.coach-new').count() == 1 and 'AI提案に 2件' in pg.inner_text('.coach-new'))
+    pg.evaluate("document.querySelector('.coach-new').scrollIntoView({block: 'start'})"); wait_idle(pg, 200)
+    shot(pg, 'v140_coach.png')
+    pg.evaluate("LifePlan.syncNow()"); wait_idle(pg, 1500)
+    check('コーチ：もう一度読んでも重複しない', S(pg, "LifePlan.state.aiSuggestions.filter(s => s.source === 'coach').length") == 3)
+    pg.evaluate("location.hash = '#aisuggest'"); wait_idle(pg, 500)
+    check('コーチ：AI提案の画面に出る（コーチ印）', pg.locator('.sug-card[data-sug="sug:coach:2026-11-02-t:0"]').count() == 1 and 'コーチ' in pg.inner_text('.sug-card[data-sug="sug:coach:2026-11-02-t:0"]'))
+    pg.click('.sug-card[data-sug="sug:coach:2026-11-02-t:0"] [data-action=aiSugMove]'); wait_idle(pg, 400)
+    ci = S(pg, "LifePlan.state.items.find(i => i.title === '区役所の受付時間を調べる')")
+    check('コーチ：自分のリストへ移せる', ci and ci['quadrant'] == 'q1' and len(ci['steps']) == 2 and ci['source'] == 'ai')
+    pg.wait_for_timeout(4000)
+    rem = gh.get_json('data/life-plan.json')['data']
+    check('同期：aiSuggestions・aiAnalyses も保存', any(s['id'] == 'sug:coach:2026-11-02-t:0' and s['status'] == 'moved' for s in rem.get('aiSuggestions', [])) and 'aiAnalyses' in rem)
+    pg.evaluate("location.hash = '#home'"); wait_idle(pg, 300)
     # ── PC ──
     state_dump = pg.evaluate("localStorage.getItem('lifeplan.v1')")
     # ── Service Worker・オフライン（別コンテキスト：同期のモックと分けるため）──
@@ -1130,7 +1319,7 @@ with sync_playwright() as p:
     nav = sp.evaluate("performance.getEntriesByType('navigation')[0].name")
     check('アップデート：?v=<時刻> で読み込み直す', re.search(r'[?&]v=\d{10,}', nav) is not None and sp.evaluate('window.__beforeUpdate') is None, nav)
     check('アップデート：古いキャッシュを削除', 'lifeplan-old-test' not in sp.evaluate('caches.keys()'))
-    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.3.2' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
+    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.4.0' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
     check('アップデート：Service Worker は引き続き有効', sp.evaluate("navigator.serviceWorker.getRegistration().then(r => !!(r && r.active))"))
     swc.set_offline(True)
     sp.reload(); wait_idle(sp, 1200)

@@ -130,6 +130,12 @@
     toggleJDay: (d, el) => toggleJournalDay(d.date, el),
     viewPhoto: (d) => viewPhoto(d.photoId, d.entry),
     removeEditorPhoto: (d) => removeEditorPhoto(d.photoId),
+    aiSugMove: (d) => moveSuggestion(d.id),
+    aiSugDismiss: (d) => dismissSuggestion(d.id),
+    aiSugReopen: (d) => reopenSuggestion(d.id),
+    aiSugMoveAll: () => moveAllSuggestions(),
+    anaRerun: () => runAnalysis(true),
+    anaCollapse: () => { aiDaily.collapsed = !aiDaily.collapsed; saveAiDaily(); rerender(); },
     habitMonth: (d) => {
       const h = getHabit(d.id); if (!h) return;
       const cur = todayStr().slice(0, 7); const base = ui.habitMonth[h.id] || cur;
@@ -233,6 +239,9 @@
       case 'journalPhoto': if (el.files && el.files.length) startPhotoQueue(el.files); break;
       case 'journalEntryPhoto': if (el.files && el.files.length) { const fs = [...el.files]; el.value = ''; addEditorPhotos(fs); } break;
       case 'obsidianFiles': if (el.files && el.files.length) importObsidianFiles(el.files); break;
+      case 'aiSugQuadrant': setSuggestionQuadrant(d.id, el.value); break;
+      case 'aiDaily': ai.daily = el.checked; saveAi(); toast(el.checked ? '毎日の自動分析をオンにしました' : '毎日の自動分析をオフにしました'); if (el.checked) maybeDailyAnalysis(); break;
+      case 'aiAutoMove': ai.autoMove = el.checked; saveAi(); toast(el.checked ? 'AI提案を自動で自分のリストに移します' : 'AI提案は「🤖 AI提案」に並べるだけにします'); break;
       case 'aiShare': ai.share = el.checked; saveAi(); toast(ai.share ? 'タスクとジャーナルの要約を共有します' : 'データを共有せずに相談します'); rerender(); break;
       case 'syncAuto': sync.auto = el.checked; saveSync(); if (sync.auto) syncNow(); setSyncState(syncState); toast(sync.auto ? '自動同期をオンにしました' : '自動同期をオフにしました'); break;
       default: break;
@@ -371,7 +380,9 @@
   setTimeout(() => photoGc(), 5000);
   setSyncState(syncState);
   if (sync.connected && sync.auto) syncNow();
+  setTimeout(() => maybeDailyAnalysis(), 1200);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') setTimeout(() => maybeDailyAnalysis(), 800); });
 
   // テスト・デバッグ用（読み取りのみ）
-  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, pomu: (h, today) => { const i = pomuInfo(normHabit(h), today); return { key: i.key, name: i.name, route: i.route, lv: i.lv, total: i.total, M: i.M, streak: i.streak, best: i.best, hints: i.hints }; }, pomuChangeMsg, syncNow: () => syncNow(), topPomu: () => { const p = topPomu(); return { key: p.key, lv: p.lv, id: p.h ? p.h.id : '' }; }, photoIds: async () => (await photoAll()).map((r) => r.id).sort(), photoInfo: async (id) => { const r = await photoGet(id); return r ? { id: r.id, bytes: r.full.byteLength, synced: !!r.synced } : null; }, syncPhotos: () => syncPhotos(), photoGc: () => photoGc(), photoDims: async (id) => { const r = await photoGet(id); if (!r) return null; const b = await createImageBitmap(new Blob([r.full], { type: 'image/jpeg' })); return [b.width, b.height, r.full.byteLength]; } };
+  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, pomu: (h, today) => { const i = pomuInfo(normHabit(h), today); return { key: i.key, name: i.name, route: i.route, lv: i.lv, total: i.total, M: i.M, streak: i.streak, best: i.best, hints: i.hints }; }, pomuChangeMsg, syncNow: () => syncNow(), topPomu: () => { const p = topPomu(); return { key: p.key, lv: p.lv, id: p.h ? p.h.id : '' }; }, photoIds: async () => (await photoAll()).map((r) => r.id).sort(), photoInfo: async (id) => { const r = await photoGet(id); return r ? { id: r.id, bytes: r.full.byteLength, synced: !!r.synced } : null; }, syncPhotos: () => syncPhotos(), photoGc: () => photoGc(), aiDaily: () => ({ ...aiDaily, manualLeft: manualLeft(), busy: anaUi.busy, error: anaUi.error, daily: aiDailyOn(), autoMove: aiAutoMoveOn() }), parseAnalysis, maybeDailyAnalysis: () => maybeDailyAnalysis(), runAnalysis: () => runAnalysis(true), photoDims: async (id) => { const r = await photoGet(id); if (!r) return null; const b = await createImageBitmap(new Blob([r.full], { type: 'image/jpeg' })); return [b.width, b.height, r.full.byteLength]; } };
 })();

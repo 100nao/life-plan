@@ -136,7 +136,7 @@
       if (d.dir === '0') { delete ui.habitMonth[h.id]; rerender(); return; }
       const [y, m] = base.split('-').map(Number); const dt = new Date(y, m - 1 + Number(d.dir), 1);
       const ym = monthKey(dt);
-      if (ym > cur || ym < h.startDate.slice(0, 7)) return;
+      if (ym > cur || ym < habitMinYm(h)) return;
       ui.habitMonth[h.id] = ym; rerender();
     },
     editHabit: (d) => openHabitEditor(d.id),

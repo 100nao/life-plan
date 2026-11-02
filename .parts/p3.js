@@ -486,7 +486,7 @@
       const missed = !done && !before && (ds < st.today || marked);
       const cls = [done ? 'done' : '', missed ? 'missed' : '', marked ? 'marked-x' : missed ? 'auto-x' : '', ds === st.today ? 'today' : '', future ? 'future' : '', before ? 'before' : '', dow === 0 ? 'sun' : dow === 6 ? 'sat' : ''].join(' ');
       const inner = `<span class="hc-num">${d}</span><span class="hc-mark">${done ? STAMP_O : marked ? STAMP_XM : missed ? STAMP_X : ''}</span>`;
-      if (future || before) cells.push(`<span class="hc-day ${cls}">${inner}</span>`);
+      if (future) cells.push(`<span class="hc-day ${cls}">${inner}</span>`);
       else cells.push(`<button class="hc-day ${cls}" data-action="habitCycle" data-id="${h.id}" data-date="${ds}" aria-pressed="${done}" aria-label="${m}月${d}日${done ? '（できた）' : marked ? '（できなかった）' : missed ? '（スタンプなし）' : ''}・タップで 〇→×→なし">${inner}</button>`);
     }
     for (let k = 1; cells.length % 7; k++) cells.push(`<span class="hc-day other"><span class="hc-num">${k}</span></span>`);
@@ -497,7 +497,6 @@
     if (!h) return sectionHead('見つかりません') + '<p class="muted">この目標は削除されたようです。</p><a class="btn soft" href="#habits">習慣スタンプへ</a>';
     const i = pomuInfo(h);
     const curYm = i.today.slice(0, 7);
-    const startYm = h.startDate.slice(0, 7);
     let ym = ui.habitMonth[h.id] || curYm;
     if (ym > curYm) ym = curYm;
     const [y, m] = ym.split('-').map(Number);
@@ -524,11 +523,13 @@
       <p class="stamp-note">カレンダーの日付をタップすると 〇 → × → なし の順に切り替わります</p>
     </section>`);
     out.push(`<section class="card habit-cal">
-      <div class="hc-head"><button class="icon-btn" data-action="habitMonth" data-id="${h.id}" data-dir="-1" aria-label="前の月" ${ym <= startYm ? 'disabled' : ''}>${ICON.back}</button>
+      <div class="hc-head"><button class="icon-btn" data-action="habitMonth" data-id="${h.id}" data-dir="-1" aria-label="前の月" ${ym <= habitMinYm(h) ? 'disabled' : ''}>${ICON.back}</button>
         <h2 class="hc-title">${y}.<b>${m}</b></h2>
         <button class="icon-btn" data-action="habitMonth" data-id="${h.id}" data-dir="1" aria-label="次の月" ${ym >= curYm ? 'disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg></button></div>
       <div class="hc-grid hc-week">${'日月火水木金土'.split('').map((w, k) => `<span class="${k === 0 ? 'sun' : k === 6 ? 'sat' : ''}">${w}</span>`).join('')}</div>
       <div class="hc-grid">${habitCalendar(h, i, ym)}</div>
+      <div class="hc-legend" aria-label="凡例"><span class="lg lg-o">${STAMP_O}できた</span><span class="lg lg-x">${STAMP_XM}できなかった</span><span class="lg lg-auto">${STAMP_X}未記入</span></div>
+      <p class="hc-hint">付け忘れた日は、日付をタップすると〇・×を付けられます</p>
       ${ym !== curYm ? `<div class="center"><button class="btn ghost small" data-action="habitMonth" data-id="${h.id}" data-dir="0">今月にもどる</button></div>` : ''}
     </section>`);
     const ring = (pct) => `style="--p:${Math.max(0, Math.min(100, pct))}"`;
@@ -560,6 +561,27 @@
     out.push('<p class="muted small center">レベルはスタンプの「累計日数」で決まります（連続でなくてもOK）。今日はまだ「お休み」にはなりません。</p>');
     return out.join('');
   }
+  // 付け忘れの記入はさかのぼれる（開始日より前でも OK・最大 HABIT_BACK_MONTHS か月前、開始月がもっと前ならそこまで）
+  const HABIT_BACK_MONTHS = 24;
+  function habitMinYm(h) {
+    const t = new Date(); const back = monthKey(new Date(t.getFullYear(), t.getMonth() - HABIT_BACK_MONTHS, 1));
+    const s = h.startDate.slice(0, 7);
+    return s < back ? s : back;
+  }
+  // さかのぼって付けたときのぽむの変化は、続けて押し終わってから最後の姿で1回だけお知らせ
+  const pomuBatch = new Map(); // id -> { from, timer }
+  function queuePomuMsg(h) {
+    const b = pomuBatch.get(h.id);
+    clearTimeout(b.timer);
+    b.timer = setTimeout(() => {
+      pomuBatch.delete(h.id);
+      const cur = getHabit(h.id); if (!cur) return;
+      const info = pomuInfo(cur);
+      const msg = b.from !== info.key ? pomuChangeMsg(b.from, info.key) : null;
+      if (msg) showPomuMsg(cur, info, msg);
+    }, POMU_BATCH_MS);
+  }
+  const POMU_BATCH_MS = 1400;
   // 日付の状態：'done'（〇）/ 'missed'（×）/ ''（なし）
   const habitDayState = (h, ds) => (h.done.includes(ds) ? 'done' : (h.missed || []).includes(ds) ? 'missed' : '');
   function setHabitDay(id, date, to) {
@@ -567,9 +589,14 @@
     if (!h) return;
     const today = todayStr();
     const ds = isDateStr(date) ? date : today;
-    if (ds > today || ds < h.startDate) return;
+    if (ds > today || ds < habitMinYm(h) + '-01') return;
     const from = habitDayState(h, ds);
     if (from === to) return;
+    const backfill = ds !== today || pomuBatch.has(h.id);
+    if (backfill && !pomuBatch.has(h.id)) pomuBatch.set(h.id, { from: h.seen || pomuInfo(h).key, timer: null });
+    // 開始日より前に付けたら、開始日をその日までさかのぼる（取り消しても開始日は戻さない）
+    const moved = to && ds < h.startDate;
+    if (moved) h.startDate = ds;
     h.done = h.done.filter((d) => d !== ds);
     h.missed = (h.missed || []).filter((d) => d !== ds);
     if (to === 'done') h.done = [...h.done, ds].sort();
@@ -578,9 +605,10 @@
     const r = updatePomu(h);
     save(); rerender();
     const day = ds === today ? '今日' : fmtShort(ds);
-    if (r.msg && r.msg.big) showPomuMsg(h, r.info, r.msg);
-    else if (r.msg) toast(`${h.emoji} ${r.msg.text}`);
-    else if (to === 'done') toast(`〇 ${day}のスタンプ！（累計 ${r.info.total}日）`);
+    if (backfill) { queuePomuMsg(h); if (moved) { toast(`${to === 'done' ? '〇' : '×'} ${day}を付けました（開始日を ${fmtShort(ds)} にしました）`); return; } }
+    else if (r.msg && r.msg.big) { showPomuMsg(h, r.info, r.msg); return; }
+    else if (r.msg) { toast(`${h.emoji} ${r.msg.text}`); return; }
+    if (to === 'done') toast(`〇 ${day}のスタンプ！（累計 ${r.info.total}日）`);
     else if (to === 'missed') toast(`× ${day}は「できなかった」にしました。また明日から！`);
     else toast(from === 'done' ? 'スタンプを取り消しました' : '× を取り消しました');
   }

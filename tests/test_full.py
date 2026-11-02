@@ -676,7 +676,7 @@ with sync_playwright() as p:
     def dd(n): return (TD - datetime.timedelta(days=n)).isoformat()
     def pomu(done, start, today=None):
         return pg.evaluate("([d, s, t]) => LifePlan.pomu({id: 'x', name: 't', startDate: s, done: d}, t)", [done, start, today or TD.isoformat()])
-    check('習慣：バージョン 1.3.1', S(pg, 'LifePlan.version') == '1.3.1')
+    check('習慣：バージョン 1.3.2', S(pg, 'LifePlan.version') == '1.3.2')
     check('習慣：state.habits が配列', S(pg, 'Array.isArray(LifePlan.state.habits)'))
     # ぽむのルール
     r = pomu([], dd(0)); check('ぽむ：0日はたまご（stage-1）', r['key'] == 'stage-1' and r['lv'] == 1, r)
@@ -888,6 +888,68 @@ with sync_playwright() as p:
     check('ぽむ（上部バー）：いちばんレベルの高い目標', t2['id'] == 'ha' and t2['lv'] == 3 and tpg.get_attribute('#topPomu', 'src') == f"images/monster/{t2['key']}-256.webp", t2)
     tc.close()
 
+
+    # ── v1.3.2：付け忘れをさかのぼって記入・スタンプの色分け ──
+    bc = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2, locale='ja-JP', timezone_id='Asia/Tokyo', service_workers='block')
+    bp = bc.new_page(); bp.on('pageerror', lambda e: errors.append('BACK ' + str(e)))
+    bp.goto(URL); wait_idle(bp, 400)
+    HN = {'id': 'hback', 'name': '日記を書く', 'emoji': '✍️', 'startDate': TD.isoformat(), 'done': [], 'createdAt': now, 'updatedAt': now}
+    put_habits(bp, [HN])
+    bp.evaluate("location.hash = '#habits/hback'"); wait_idle(bp, 600); rm_celebrate(bp)
+    bh = lambda: S(bp, "LifePlan.state.habits.find(h => h.id === 'hback')")
+    check('さかのぼり：付け忘れのヒント', '付け忘れた日は、日付をタップすると〇・×を付けられます' in bp.inner_text('.habit-cal'))
+    check('さかのぼり：凡例（できた・できなかった・未記入）', bp.locator('.hc-legend .lg-o').count() == 1 and bp.locator('.hc-legend .lg-x').count() == 1 and 'できなかった' in bp.inner_text('.hc-legend'))
+    check('さかのぼり：未来の日は押せない', bp.locator('span.hc-day.future').count() >= 1 and bp.locator('button.hc-day.future').count() == 0) if TD.day < 28 else None
+    check('さかのぼり：前の月へ移動できる（開始日が今日でも）', bp.locator('[data-action=habitMonth][data-dir="-1"]').is_enabled())
+    # 今月の、開始日より前の日（今日が1日なら前の月に回す）
+    if TD.day > 1:
+        d1 = dd(1)
+        check('さかのぼり：開始日より前の日も押せる', bp.locator(f'button.hc-day.before[data-date="{d1}"]').count() == 1)
+        bp.click(f'button.hc-day[data-date="{d1}"]'); wait_idle(bp, 400)
+        check('さかのぼり：開始日より前に〇 → 開始日がその日に', d1 in bh()['done'] and bh()['startDate'] == d1, bh()['startDate'])
+        bp.click(f'button.hc-day[data-date="{d1}"]'); wait_idle(bp, 300); bp.click(f'button.hc-day[data-date="{d1}"]'); wait_idle(bp, 300)
+        check('さかのぼり：取り消しても開始日は戻さない', d1 not in bh()['done'] and d1 not in bh()['missed'] and bh()['startDate'] == d1)
+    # 前の月：続けて付ける（ぽむのお祝いは最後の姿で1回だけ）
+    bp.evaluate("window.__cele = 0; new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach((n) => { if (n.id === 'pomuCelebrate') window.__cele++; }))).observe(document.body, {childList: true})")
+    bp.click('[data-action=habitMonth][data-dir="-1"]'); wait_idle(bp, 400)
+    pm = (TD.replace(day=1) - datetime.timedelta(days=1))
+    pdays = [pm.replace(day=k).isoformat() for k in range(pm.day - 13, pm.day + 1)]
+    check('さかのぼり：前の月の日付も押せる', all(bp.locator(f'button.hc-day[data-date="{x}"]').count() == 1 for x in pdays))
+    xs = {pdays[4], pdays[9]}
+    for x in pdays:
+        bp.click(f'button.hc-day[data-date="{x}"]'); bp.wait_for_timeout(120)
+        if x in xs: bp.click(f'button.hc-day[data-date="{x}"]'); bp.wait_for_timeout(120)
+    h4 = bh()
+    check('さかのぼり：前の月に〇と×を記入', all(x in h4['done'] for x in pdays if x not in xs) and all(x in h4['missed'] for x in xs), [h4['done'], h4['missed']])
+    check('さかのぼり：開始日はいちばん前の記入日に', h4['startDate'] == pdays[0], h4['startDate'])
+    check('さかのぼり：続けて押している間はお祝いを出さない', bp.evaluate('window.__cele') == 0)
+    wait_js(bp, "window.__cele > 0", 4000); bp.wait_for_timeout(600)
+    info = S(bp, "LifePlan.pomu(LifePlan.state.habits.find(h => h.id === 'hback'))")
+    check('さかのぼり：ぽむは記入した日で育つ（累計に入る）', info['total'] == 12 and info['lv'] == 3, info)
+    check('さかのぼり：お祝いは最後の姿で1回だけ', bp.evaluate('window.__cele') == 1 and info['key'] in (bp.get_attribute('#pomuCelebrate .pc-img', 'src') or ''), [bp.evaluate('window.__cele'), info['key']])
+    bp.wait_for_timeout(4800); rm_celebrate(bp)
+    check('さかのぼり：見た姿として記録（あとで二重に出ない）', bh()['seen'] == info['key'] and info['key'] in bh()['unlocked'])
+    # 色分け：〇＝緑・×＝青・未記入の×＝薄いグレー
+    col = lambda sel, prop: bp.evaluate(f"(() => {{ const e = document.querySelector('{sel}'); return e ? getComputedStyle(e).{prop} : ''; }})()")
+    check('色分け：カレンダーの〇は緑', col('.hc-day.done .st-o circle', 'stroke') == 'rgb(63, 166, 107)' and col('.hc-day.done .hc-mark', 'backgroundColor') == 'rgb(230, 244, 234)', col('.hc-day.done .st-o circle', 'stroke'))
+    check('色分け：カレンダーの×は青', col('.hc-day.marked-x .st-xm path', 'stroke') == 'rgb(59, 125, 216)' and col('.hc-day.marked-x .hc-mark', 'backgroundColor') == 'rgb(229, 238, 251)')
+    check('色分け：未記入の×は薄いグレー', bp.locator('.hc-day.auto-x').count() == 0 or col('.hc-day.auto-x .st-x path', 'stroke') == 'rgb(128, 134, 139)')
+    check('色分け：「できた」ボタンは緑・「できなかった」ボタンは青', col('.stamp-big', 'color') == 'rgb(63, 166, 107)' and col('.stamp-miss', 'color') == 'rgb(59, 125, 216)')
+    check('色分け：統計（できなかった日）は青', col('.hsm-n', 'color') == 'rgb(59, 125, 216)')
+    bp.evaluate("document.querySelector('.habit-cal').scrollIntoView({block: 'start'}); window.scrollBy(0, -70)"); wait_idle(bp, 300)
+    shot(bp, 'v132_habit.png')
+    bp.evaluate("location.hash = '#home'"); wait_idle(bp, 600); rm_celebrate(bp)
+    if bp.locator('.stamp-btn').count(): bp.click('.stamp-btn >> nth=0')
+    wait_idle(bp, 500); rm_celebrate(bp)
+    check('色分け：ホームの今日のスタンプも緑', bp.locator('.stamp-btn.on').count() == 0 or col('.stamp-btn.on', 'backgroundColor') == 'rgb(230, 244, 234)')
+    # 2年より前には戻れない（開始日がそれより新しいとき）
+    for _ in range(30):
+        b = bp.locator('[data-action=habitMonth][data-dir="-1"]')
+        if not b.count(): bp.evaluate("location.hash = '#habits/hback'"); wait_idle(bp, 400); continue
+        if not b.is_enabled(): break
+        b.click(); bp.wait_for_timeout(60)
+    check('さかのぼり：前の月は最大24か月前まで', S(bp, "(() => { const t = new Date(); const m = (t.getFullYear() * 12 + t.getMonth()) - 24; return document.querySelector('.hc-title').textContent.replace(/\\s/g, '') === Math.floor(m / 12) + '.' + (m % 12 + 1); })()"), bp.inner_text('.hc-title'))
+    bc.close()
     # ── 3) スワイプでメニュー（右から出る）──
     cdp = ctx.new_cdp_session(pg)
     def swipe(x0, y0, x1, y1, steps=8, ms=16):
@@ -901,7 +963,7 @@ with sync_playwright() as p:
     db = pg.locator('#drawer').bounding_box()
     check('スワイプ：右から左へなぞるとメニューが開く', is_open() and pg.is_visible('#drawerBackdrop'))
     check('スワイプ：メニューは右側から出る', db and abs(db['x'] + db['width'] - 390) <= 2 and db['x'] > 30, db)
-    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.3.1' in pg.inner_text('#drawer [data-action=forceUpdate]'))
+    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.3.2' in pg.inner_text('#drawer [data-action=forceUpdate]'))
     shot(pg, 'v131_menu.png')
     swipe(90, 500, 330, 505)
     check('スワイプ：左から右へで閉じる', not is_open())
@@ -1068,7 +1130,7 @@ with sync_playwright() as p:
     nav = sp.evaluate("performance.getEntriesByType('navigation')[0].name")
     check('アップデート：?v=<時刻> で読み込み直す', re.search(r'[?&]v=\d{10,}', nav) is not None and sp.evaluate('window.__beforeUpdate') is None, nav)
     check('アップデート：古いキャッシュを削除', 'lifeplan-old-test' not in sp.evaluate('caches.keys()'))
-    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.3.1' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
+    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.3.2' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
     check('アップデート：Service Worker は引き続き有効', sp.evaluate("navigator.serviceWorker.getRegistration().then(r => !!(r && r.active))"))
     swc.set_offline(True)
     sp.reload(); wait_idle(sp, 1200)

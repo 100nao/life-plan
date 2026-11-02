@@ -1009,3 +1009,30 @@ body.drawer-dragging .drawer { box-shadow: var(--shadow-lg); }
 .photo-viewer.out { opacity: 0; transition: opacity .2s; }
 .pv-img { max-width: 100%; max-height: calc(100% - 64px); object-fit: contain; border-radius: 14px; box-shadow: 0 10px 40px rgba(0, 0, 0, .4); }
 .pv-bar { display: flex; gap: 10px; }
+
+/* v1.3.2：付け忘れをさかのぼって記入 */
+button.hc-day.before .hc-num { opacity: .6; }
+button.hc-day.before:hover { background: var(--surface-2); }
+.hc-hint { margin: 10px 4px 2px; text-align: center; font-size: .8rem; color: var(--muted); }
+.hc-hint::before { content: '✎ '; opacity: .7; }
+
+/* v1.3.2：スタンプの色分け（〇できた＝緑／×できなかった＝青／未記入の×＝薄いグレー）。ぽむまわりのピンクは --pomu-pink で残す */
+:root { --stamp: #3fa66b; --stamp-soft: #e6f4ea; --stamp-x: #3b7dd8; --stamp-x-soft: #e5eefb; --pomu-pink: #ec8f86; --pomu-pink-soft: #fdecea; --sun: #e07a70; }
+:root[data-theme="dark"] { --stamp: #5cc489; --stamp-soft: #1f3328; --stamp-x: #6da2ee; --stamp-x-soft: #1f2b3d; --pomu-pink-soft: #43302f; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --stamp: #5cc489; --stamp-soft: #1f3328; --stamp-x: #6da2ee; --stamp-x-soft: #1f2b3d; --pomu-pink-soft: #43302f; } }
+.route-main .route-chip { background: var(--pomu-pink-soft); color: var(--pomu-pink); }
+.pomu-next b, .pc-text, .hr-lv { color: var(--pomu-pink); }
+.progress.pomu-progress span { background: linear-gradient(90deg, #f6b7a8, var(--pomu-pink)); }
+.hc-title { color: var(--text); }
+.hc-title b { color: var(--stamp); }
+.hc-week .sun, .hc-day.sun .hc-num { color: var(--sun); }
+.hc-day.today .hc-num { color: var(--stamp); }
+.hs-circle.total { background: linear-gradient(160deg, #a9dcbc, var(--stamp)); }
+.st-x path { stroke: var(--muted); }
+.hc-day.auto-x .st-x path { stroke: var(--muted); }
+.hc-day.done .hc-mark { border-radius: 50%; background: var(--stamp-soft); width: 34px; height: 34px; }
+.hc-legend { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px 16px; margin: 12px 0 0; font-size: 12px; color: var(--muted); }
+.hc-legend .lg { display: inline-flex; align-items: center; gap: 4px; }
+.hc-legend svg { width: 18px; height: 18px; }
+.hc-legend .lg-o { color: var(--stamp); } .hc-legend .lg-x { color: var(--stamp-x); }
+.hc-legend .lg-auto svg path { stroke: var(--muted); opacity: .55; }

@@ -147,6 +147,7 @@ class FakeGCal:
         self.calls = []
         self.writes = []  # (method, calendarId, eventId, body)
         self.n = 0
+        self.list_error = False  # True の間 calendarList が 403 を返す（v1.7.2 の一覧失敗テスト用）
         self.calendars = [
             {'id': 'primary', 'summary': 'メイン', 'backgroundColor': '#039be5', 'accessRole': 'owner', 'primary': True, 'selected': True},
             {'id': 'work', 'summary': '仕事', 'backgroundColor': '#8e24aa', 'accessRole': 'writer', 'selected': True},
@@ -164,6 +165,8 @@ class FakeGCal:
         u = up.urlparse(request.url)
         if u.path == '/calendar/v3/users/me/calendarList':
             if request.method == 'GET':
+                if self.list_error:
+                    return route.fulfill(status=403, headers=cors, body=json.dumps({'error': {'message': 'insufficient authentication scopes', 'status': 'PERMISSION_DENIED'}}))
                 return route.fulfill(status=200, headers=cors, body=json.dumps({'items': self.calendars}, ensure_ascii=False))
             return route.fulfill(status=405, headers=cors, body='{}')
         m = re.match(r'/calendar/v3/calendars/([^/]+)/events(?:/([^/]+))?$', u.path)
@@ -460,7 +463,7 @@ with sync_playwright() as p:
     check('コーチ受信箱の自動取り込み', S(pg, "LifePlan.state.coachNotes.filter(c => c.source === 'github').length") == 2)
     check('ホームに「コーチからの新着アドバイス」', pg.locator('.coach-new').count() == 1 and 'コーチからの新着アドバイス' in pg.inner_text('.coach-new'))
     check('コーチの提案ステップを自動適用', S(pg, "LifePlan.state.items.find(i => i.title === 'ICL予約する').steps.length") == 2)
-    check('未読バッジ', pg.locator('#coachBadge').is_visible() and pg.inner_text('#coachBadge') == '2')
+    check('未読バッジ', S(pg, "(() => { const b = document.getElementById('coachBadge'); return !!b && !b.hidden && b.textContent === '2'; })()"))
     pg.evaluate('window.scrollTo(0,0)')
     shot(pg, 'sp_home_coach.png')
     pg.wait_for_timeout(4500)
@@ -469,7 +472,7 @@ with sync_playwright() as p:
     pg.evaluate("location.hash = '#home'"); pg.reload(); wait_idle(pg, 2000)
     check('同じ受信箱を再度読んでも重複しない', S(pg, "LifePlan.state.coachNotes.filter(c => c.source === 'github').length") == 2)
     pg.click('.coach-new [data-action=markAllRead]'); wait_idle(pg)
-    check('すべて既読', pg.locator('.coach-new').count() == 0 and not pg.locator('#coachBadge').is_visible())
+    check('すべて既読', pg.locator('.coach-new').count() == 0 and S(pg, "document.getElementById('coachBadge').hidden"))
 
     # 競合（409）→ 再試行
     rr = gh.get_json('data/life-plan.json'); rr['data']['items'].insert(0, {"id": "remote-2", "list": "later", "title": "競合テスト（リモート）", "createdAt": "2026-10-30T00:00:00.000Z", "updatedAt": datetime.datetime.now(datetime.UTC).replace(tzinfo=None).isoformat() + 'Z'})
@@ -493,11 +496,11 @@ with sync_playwright() as p:
 
     # 同期状態の表示
     pg.evaluate("location.hash = '#settings/sync'"); wait_idle(pg)
-    check('同期インジケーター', pg.locator('#syncDot.st-ok').count() == 1)
+    check('同期インジケーター（設定カードの状態チップ）', pg.locator('#syncCard .chip.sync-ok').count() == 1)
     shot(pg, 'sp_settings_synced.png')
 
     ctx.set_offline(True); pg.evaluate("window.dispatchEvent(new Event('offline'))"); wait_idle(pg, 300)
-    check('オフライン表示', pg.locator('#syncDot.st-offline').count() == 1)
+    check('オフライン表示（設定カードの状態チップ）', pg.locator('#syncCard .chip.sync-offline').count() == 1)
     ctx.set_offline(False); pg.evaluate("window.dispatchEvent(new Event('online'))"); wait_idle(pg, 1500)
 
     # ── AIに相談（Gemini・モック）──
@@ -769,7 +772,7 @@ with sync_playwright() as p:
     def dd(n): return (TD - datetime.timedelta(days=n)).isoformat()
     def pomu(done, start, today=None):
         return pg.evaluate("([d, s, t]) => LifePlan.pomu({id: 'x', name: 't', startDate: s, done: d}, t)", [done, start, today or TD.isoformat()])
-    check('バージョン 1.7.1', S(pg, 'LifePlan.version') == '1.7.1')
+    check('バージョン 1.7.2', S(pg, 'LifePlan.version') == '1.7.2')
     check('習慣：state.habits が配列', S(pg, 'Array.isArray(LifePlan.state.habits)'))
     # ぽむのルール
     r = pomu([], dd(0)); check('ぽむ：0日はたまご（stage-1）', r['key'] == 'stage-1' and r['lv'] == 1, r)
@@ -1056,7 +1059,7 @@ with sync_playwright() as p:
     db = pg.locator('#drawer').bounding_box()
     check('スワイプ：右から左へなぞるとメニューが開く', is_open() and pg.is_visible('#drawerBackdrop'))
     check('スワイプ：メニューは右側から出る', db and abs(db['x'] + db['width'] - 390) <= 2 and db['x'] > 30, db)
-    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.7.1' in pg.inner_text('#drawer [data-action=forceUpdate]'))
+    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.7.2' in pg.inner_text('#drawer [data-action=forceUpdate]'))
     shot(pg, 'v131_menu.png')
     swipe(90, 500, 330, 505)
     check('スワイプ：左から右へで閉じる', not is_open())
@@ -1595,6 +1598,41 @@ with sync_playwright() as p:
     dels = [w for w in gcal_fake.writes if w[0] == 'DELETE' and w[2] == new_id]
     check('カレンダータブ：削除で DELETE', len(dels) == 1 and new_id not in gcal_fake.events, dels)
     check('カレンダータブ：削除がリストから消える', pg.locator(f'.gtab-ev[data-eid="{new_id}"]').count() == 0)
+    # ── v1.7.2：手動取得ではカレンダー一覧を必ず取り直す／一覧失敗の見える化／ヘッダー整理 ──
+    check('v1.7.2：ヘッダーは更新・検索・設定のみ（吹き出しと雲を削除）', pg.locator('.topbar-actions [data-action=refreshAll]').count() == 1 and pg.locator('.topbar-actions a[href="#search"]').count() == 1 and pg.locator('.topbar-actions a[href="#settings"]').count() == 1 and pg.locator('.topbar-actions a[href="#coach"]').count() == 0 and pg.locator('#syncDot').count() == 0)
+    check('v1.7.2：ヘッダーの設定アイコンは歯車', S(pg, "document.querySelector('.topbar-actions a[href=\"#settings\"] svg').innerHTML.includes('M19.4 15')"))
+    check('v1.7.2：更新ボタンの aria-label は「更新」', pg.get_attribute('.topbar-actions [data-action=refreshAll]', 'aria-label') == '更新')
+    # 購読カレンダーを後から追加した状況を再現（FakeGCal 側にだけ増やす。一覧キャッシュは新鮮な状態）
+    gcal_fake.calendars.append({'id': 'subcal', 'summary': '購読カレンダー', 'backgroundColor': '#e67c73', 'accessRole': 'reader', 'selected': True})
+    gcal_fake.events['sub_1'] = {'id': 'sub_1', 'calendarId': 'subcal', 'summary': '購読の予定', 'start': {'date': TD.isoformat()}, 'end': {'date': tdp(1)}}
+    pg.evaluate("LifePlan.calendar.calendarsFetchedAt = new Date().toISOString()")
+    nlist0 = sum('calendarList' in c for c in gcal_fake.calls)
+    pg.evaluate('LifePlan.pullCalendar()'); wait_idle(pg, 500)
+    check('v1.7.2：自動取得は一覧キャッシュを使う（新規カレンダーはまだ出ない）', sum('calendarList' in c for c in gcal_fake.calls) == nlist0 and len(S(pg, 'LifePlan.calendar.calendars')) == 4 and S(pg, "LifePlan.calendar.calendar.events.some(e => e.id === 'sub_1')") is False)
+    pg.evaluate("location.hash = '#settings/gcal'"); wait_idle(pg, 400)
+    pg.click('[data-action=gcalRefresh]'); wait_js(pg, "LifePlan.calendar.calendars.length === 5", 8000); wait_idle(pg, 400)
+    check('v1.7.2：「今すぐ取得」で一覧を取り直し購読カレンダーが即出る', sum('calendarList' in c for c in gcal_fake.calls) > nlist0 and S(pg, "LifePlan.calendar.calendar.events.some(e => e.id === 'sub_1')"))
+    pg.evaluate("location.hash = '#calendar'"); wait_idle(pg, 500)
+    pg.click(f'.gtab-cell[data-date="{TD.isoformat()}"]'); wait_idle(pg, 400)
+    check('v1.7.2：カレンダータブに購読カレンダーの予定と凡例', '購読の予定' in pg.inner_text('#main') and '購読カレンダー' in pg.inner_text('#main'))
+    # 一覧取得が 403 のとき：フラグが立ち、タブと設定カードに注意が出る
+    gcal_fake.list_error = True
+    pg.evaluate("location.hash = '#settings/gcal'"); wait_idle(pg, 400)
+    pg.click('[data-action=gcalRefresh]'); wait_js(pg, "!!LifePlan.calendar.listError", 8000); wait_idle(pg, 400)
+    check('v1.7.2：一覧403で listError が立つ（メッセージ付き）', bool(S(pg, 'LifePlan.calendar.listError')), S(pg, 'LifePlan.calendar.listError'))
+    check('v1.7.2：設定カードに一覧取得失敗の注意', 'カレンダー一覧を取得できませんでした' in pg.inner_text('#gcalCard'))
+    pg.evaluate("location.hash = '#calendar'"); wait_idle(pg, 500)
+    check('v1.7.2：カレンダータブ上部に一覧取得失敗の注意', 'カレンダー一覧を取得できませんでした' in pg.inner_text('#main'))
+    # 回復したらフラグも注意も消える
+    gcal_fake.list_error = False
+    pg.evaluate("location.hash = '#settings/gcal'"); wait_idle(pg, 400)
+    pg.click('[data-action=gcalRefresh]'); wait_js(pg, "!LifePlan.calendar.listError", 8000); wait_idle(pg, 400)
+    pg.evaluate("location.hash = '#calendar'"); wait_idle(pg, 500)
+    check('v1.7.2：一覧が取れれば注意は消える', 'カレンダー一覧を取得できませんでした' not in pg.inner_text('#main'))
+    # ヘッダーの更新ボタン：同期＋カレンダー取得が走り、完了トーストが出る
+    pg.click('.topbar-actions [data-action=refreshAll]')
+    wait_js(pg, "!document.getElementById('refreshBtn').classList.contains('spinning') && document.getElementById('toast').textContent.includes('更新しました')", 10000)
+    check('v1.7.2：更新ボタンで「更新しました ✓」トースト', '更新しました' in pg.inner_text('#toast'))
     pg.evaluate("localStorage.removeItem('lifeplan.gcal')")
     # ── v1.7.0：TASK画面（全件表示・折りたたみ）とナビ再編 ──
     tc = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2, locale='ja-JP', timezone_id='Asia/Tokyo', service_workers='block')
@@ -1678,7 +1716,7 @@ with sync_playwright() as p:
     nav = sp.evaluate("performance.getEntriesByType('navigation')[0].name")
     check('アップデート：?v=<時刻> で読み込み直す', re.search(r'[?&]v=\d{10,}', nav) is not None and sp.evaluate('window.__beforeUpdate') is None, nav)
     check('アップデート：古いキャッシュを削除', 'lifeplan-old-test' not in sp.evaluate('caches.keys()'))
-    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.7.1' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
+    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.7.2' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
     check('アップデート：Service Worker は引き続き有効', sp.evaluate("navigator.serviceWorker.getRegistration().then(r => !!(r && r.active))"))
     swc.set_offline(True)
     sp.reload(); wait_idle(sp, 1200)

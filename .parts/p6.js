@@ -1,6 +1,7 @@
 
   // ───────────────────────── アクション ─────────────────────────
   function stepOf(d) { const i = getItem(d.id); return i ? [i, i.steps.find((s) => s.id === d.step)] : [null, null]; }
+  let refreshBusy = false; // ヘッダーの更新ボタン（v1.7.2）の二重実行防止
   const actions = {
     quickAdd: (d) => openQuickAdd({ list: d.list, quadrant: d.quadrant }),
     quickAddDetail: () => { const f = $('form[data-form=quickAdd]', modalBox); if (f && f.title.value.trim()) submitQuickAdd(f, true); else if (f) f.title.focus(); },
@@ -165,6 +166,23 @@
       save(); applyTheme(); go('#home'); undoable('すべて削除しました', snap);
     },
     syncNow: async () => { if (!navigator.onLine) { toast('オフラインです'); return; } await syncNow(); toast(sync.lastError ? '⚠️ ' + sync.lastError : '同期しました ✓'); },
+    // ヘッダーの更新ボタン：GitHub 同期とカレンダー取得（カレンダー一覧も取り直す）をまとめて実行する
+    refreshAll: async (d, el) => {
+      if (refreshBusy) return;
+      refreshBusy = true;
+      if (el) el.classList.add('spinning');
+      const errs = [];
+      try {
+        const jobs = [];
+        if (sync.connected) jobs.push(syncNow().catch((e) => errs.push(e)));
+        if (gcalHasClient()) jobs.push(pullCalendar(true).catch((e) => errs.push(e)));
+        if (!jobs.length) { toast('設定で GitHub 同期か Googleカレンダー連携を接続してください'); return; }
+        await Promise.all(jobs);
+        rerender();
+        if (errs.length) toast('⚠️ ' + (errs[0].message || errs[0]));
+        else toast('更新しました ✓');
+      } finally { refreshBusy = false; if (el) el.classList.remove('spinning'); }
+    },
     syncPullOnly: async () => { await syncNow({ pullOnly: true }); toast(sync.lastError ? '⚠️ ' + sync.lastError : 'GitHub から読み込みました'); },
     syncInboxNow: async () => {
       try { const n = await pullCoachInbox(); toast(n ? `新着 ${n}件` : '新着はありません'); } catch (e) { toast('⚠️ ' + e.message); }
@@ -218,7 +236,7 @@
       rerender();
     },
     gcalConnect: () => gcalConnectInteractive(),
-    gcalRefresh: async () => { try { await pullCalendar(); rerender(); toast('Googleカレンダーを取得しました ✓'); } catch (e) { toast('⚠️ ' + (e.message || e)); } },
+    gcalRefresh: async () => { try { await pullCalendar(true); rerender(); toast('Googleカレンダーを取得しました ✓'); } catch (e) { toast('⚠️ ' + (e.message || e)); } },
     gcalDisconnect: async () => {
       if (!(await confirmDialog('この端末の Googleカレンダー連携を解除します（クライアントIDとトークンを削除します。Google側の予定は消えません）。', '解除する', true))) return;
       try { if (gcal.token && window.google && google.accounts && google.accounts.oauth2) google.accounts.oauth2.revoke(gcal.token, () => {}); } catch (e) { /* noop */ }
@@ -477,5 +495,5 @@
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') setTimeout(() => maybeDailyAnalysis(), 800); });
 
   // テスト・デバッグ用（読み取りのみ）
-  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, pomu: (h, today) => { const i = pomuInfo(normHabit(h), today); return { key: i.key, name: i.name, route: i.route, lv: i.lv, total: i.total, M: i.M, streak: i.streak, best: i.best, hints: i.hints }; }, pomuChangeMsg, syncNow: () => syncNow(), topPomu: () => { const p = topPomu(); return { key: p.key, lv: p.lv, id: p.h ? p.h.id : '' }; }, photoIds: async () => (await photoAll()).map((r) => r.id).sort(), photoInfo: async (id) => { const r = await photoGet(id); return r ? { id: r.id, bytes: r.full.byteLength, synced: !!r.synced } : null; }, syncPhotos: () => syncPhotos(), photoGc: () => photoGc(), aiDaily: () => ({ ...aiDaily, manualLeft: manualLeft(), busy: anaUi.busy, error: anaUi.error, daily: aiDailyOn(), autoMove: aiAutoMoveOn() }), analysisContext: () => analysisContext(), checkDayRollover: () => checkDayRollover(), get calendar() { return cal; }, get gcal() { return { hasClient: gcalHasClient(), connected: gcalConnected() }; }, pullCalendar: () => pullCalendar(), parseAnalysis, maybeDailyAnalysis: () => maybeDailyAnalysis(), runAnalysis: () => runAnalysis(true), photoDims: async (id) => { const r = await photoGet(id); if (!r) return null; const b = await createImageBitmap(new Blob([r.full], { type: 'image/jpeg' })); return [b.width, b.height, r.full.byteLength]; } };
+  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, pomu: (h, today) => { const i = pomuInfo(normHabit(h), today); return { key: i.key, name: i.name, route: i.route, lv: i.lv, total: i.total, M: i.M, streak: i.streak, best: i.best, hints: i.hints }; }, pomuChangeMsg, syncNow: () => syncNow(), topPomu: () => { const p = topPomu(); return { key: p.key, lv: p.lv, id: p.h ? p.h.id : '' }; }, photoIds: async () => (await photoAll()).map((r) => r.id).sort(), photoInfo: async (id) => { const r = await photoGet(id); return r ? { id: r.id, bytes: r.full.byteLength, synced: !!r.synced } : null; }, syncPhotos: () => syncPhotos(), photoGc: () => photoGc(), aiDaily: () => ({ ...aiDaily, manualLeft: manualLeft(), busy: anaUi.busy, error: anaUi.error, daily: aiDailyOn(), autoMove: aiAutoMoveOn() }), analysisContext: () => analysisContext(), checkDayRollover: () => checkDayRollover(), get calendar() { return cal; }, get gcal() { return { hasClient: gcalHasClient(), connected: gcalConnected() }; }, pullCalendar: (forceList) => pullCalendar(forceList), parseAnalysis, maybeDailyAnalysis: () => maybeDailyAnalysis(), runAnalysis: () => runAnalysis(true), photoDims: async (id) => { const r = await photoGet(id); if (!r) return null; const b = await createImageBitmap(new Blob([r.full], { type: 'image/jpeg' })); return [b.width, b.height, r.full.byteLength]; } };
 })();

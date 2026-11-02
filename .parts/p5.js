@@ -1408,7 +1408,7 @@
   // v1.5.0 の中継ファイル（data/calendar.json / calendar-links.json）読みは、未連携時のフォールバックとして残す。
   const CAL_KEY = 'lifeplan.calendar';
   const calUi = { error: '', open: false };
-  let cal = (() => { try { const o = JSON.parse(localStorage.getItem(CAL_KEY) || '{}'); return { calendar: o.calendar || null, links: o.links || null, fetchedAt: o.fetchedAt || '', calendars: Array.isArray(o.calendars) ? o.calendars : [], calendarsFetchedAt: o.calendarsFetchedAt || '' }; } catch (e) { return { calendar: null, links: null, fetchedAt: '', calendars: [], calendarsFetchedAt: '' }; } })();
+  let cal = (() => { try { const o = JSON.parse(localStorage.getItem(CAL_KEY) || '{}'); return { calendar: o.calendar || null, links: o.links || null, fetchedAt: o.fetchedAt || '', calendars: Array.isArray(o.calendars) ? o.calendars : [], calendarsFetchedAt: o.calendarsFetchedAt || '', listError: o.listError || '' }; } catch (e) { return { calendar: null, links: null, fetchedAt: '', calendars: [], calendarsFetchedAt: '', listError: '' }; } })();
   const saveCal = () => { try { localStorage.setItem(CAL_KEY, JSON.stringify(cal)); } catch (e) { /* noop */ } };
   const GCAL_KEY = 'lifeplan.gcal';
   // calendar.events（予定の読み書き）＋ calendarlist.readonly（カレンダー一覧：v1.7.0 のカレンダータブ用）
@@ -1488,7 +1488,8 @@
     return out;
   }
   async function gcalListEvents(timeMin, timeMax, q) { return gcalListEventsFor('primary', timeMin, timeMax, q); }
-  // カレンダー一覧（calendarList）。失敗したら null（呼び出し側で primary だけにフォールバック）
+  // カレンダー一覧（calendarList）。失敗したら null（呼び出し側で primary だけにフォールバック）。失敗理由は gcalListErrorMsg に残す
+  let gcalListErrorMsg = '';
   async function gcalFetchCalendars() {
     try {
       const out = []; let pageToken = '';
@@ -1507,7 +1508,7 @@
         if (!pageToken) break;
       }
       return out;
-    } catch (e) { return null; }
+    } catch (e) { gcalListErrorMsg = e.message || String(e); return null; }
   }
   const gcalCalendarById = (cid) => (Array.isArray(cal.calendars) ? cal.calendars : []).find((c) => c.id === cid) || null;
   const gcalWritableCal = (c) => !!c && (c.accessRole === 'owner' || c.accessRole === 'writer');
@@ -1540,16 +1541,24 @@
     for (const g of [...state.gcalDeletes]) { try { await gcalDeleteEvent(g.gcalId); doneIds.push(g.id); } catch (e) { /* 次回に再試行 */ } }
     if (doneIds.length) { state.gcalDeletes = state.gcalDeletes.filter((g) => !doneIds.includes(g.id)); doneIds.forEach((id) => markDeleted(id)); save(); }
   }
-  async function pullCalendarDirect() {
+  async function pullCalendarDirect(forceList) {
     const t0 = new Date(); t0.setHours(0, 0, 0, 0);
     const tPast = new Date(t0.getTime() - 30 * 86400000);
     const t180 = new Date(t0.getTime() + 180 * 86400000);
     const t2y = new Date(t0.getTime() + 731 * 86400000);
-    // カレンダー一覧は10分キャッシュ（毎回の取得を軽くする）。失敗したら前回分、無ければ primary のみで続行
+    // カレンダー一覧は10分キャッシュ（毎回の取得を軽くする）。ただし手動の取得（forceList）では必ず取り直す
+    // （購読カレンダーを追加した直後でもすぐ反映されるように）。失敗したら前回分、無ければ primary のみで続行し、失敗は cal.listError に残して見える化する
     let calendars = Array.isArray(cal.calendars) ? cal.calendars : [];
-    if (!calendars.length || !cal.calendarsFetchedAt || Date.now() - new Date(cal.calendarsFetchedAt).getTime() > 600000) {
+    let listError = cal.listError || '';
+    if (forceList || !calendars.length || !cal.calendarsFetchedAt || Date.now() - new Date(cal.calendarsFetchedAt).getTime() > 600000) {
       const fetched = await gcalFetchCalendars();
-      if (fetched && fetched.length) { calendars = fetched; cal.calendarsFetchedAt = nowIso(); }
+      if (fetched) {
+        listError = '';
+        if (fetched.length) { calendars = fetched; cal.calendarsFetchedAt = nowIso(); }
+      } else {
+        listError = gcalListErrorMsg || 'カレンダー一覧を取得できませんでした';
+      }
+      cal.listError = listError; saveCal(); // 後段で失敗して中断しても、注意表示が残るように先に永続化
     }
     if (!calendars.length) calendars = [{ id: 'primary', summary: 'メインカレンダー', color: '#039be5', accessRole: 'owner', primary: true, selected: true }];
     const primaryCal = calendars.find((c) => c.primary) || calendars.find((c) => c.id === 'primary') || calendars[0];
@@ -1564,7 +1573,7 @@
     ok.forEach((s) => s.value.forEach((e) => byKey.set(e.calendarId + '\n' + e.id, e)));
     const events = [...byKey.values()].sort((a, b) => String(a.start).localeCompare(String(b.start)));
     const before = JSON.stringify(cal.calendar);
-    cal = { calendar: { updatedAt: nowIso(), events }, calendars, calendarsFetchedAt: cal.calendarsFetchedAt, links: cal.links, fetchedAt: nowIso() };
+    cal = { calendar: { updatedAt: nowIso(), events }, calendars, calendarsFetchedAt: cal.calendarsFetchedAt, links: cal.links, fetchedAt: nowIso(), listError };
     calUi.error = ''; saveCal();
     await flushGcalDeletes();
     if (before !== JSON.stringify(cal.calendar)) rerenderSoft();
@@ -1574,6 +1583,7 @@
     const chip = gcalConnected() ? '<span class="chip sync-ok">連携済み</span>' : gcalHasClient() ? '<span class="chip">クライアントID設定済み・未接続</span>' : '<span class="chip">未設定</span>';
     return `<section class="card" id="gcalCard">
       <div class="card-head"><h2>📅 Googleカレンダー連携</h2>${chip}</div>
+      ${cal.listError ? `<p class="cal-alert small" role="alert">⚠️ カレンダー一覧を取得できませんでした（${esc(cal.listError)}）。購読カレンダーなどが表示されていない可能性があります。「Googleと連携する」を押し直すか、「今すぐ取得」を試してください。</p>` : ''}
       <p class="small">アプリが Googleカレンダーを<b>直接</b>読み書きします（中継ファイルやAIコーチは使いません）。Googleカレンダーで予定を追加・変更すると、アプリに戻ったその場で反映され、表示中は30秒ごとに自動で取り直します。カウントダウンで「Googleカレンダーにも入れる」をオンにすると、保存した瞬間に終日予定「⏳ 予定名」が作られます。</p>
       <form data-form="gcalSetup" class="ai-form">
         <label class="field"><span class="field-label">OAuth クライアントID（ウェブアプリケーション）</span>
@@ -1596,7 +1606,7 @@
       if (msg) msg.textContent = 'Googleの画面で許可してください…';
       const token = await gcalEnsureToken(true);
       if (!token) throw new Error('連携できませんでした（ポップアップがブロックされた場合は許可してください）');
-      await pullCalendar();
+      await pullCalendar(true); // 連携し直しではカレンダー一覧も必ず取り直す（追加した購読カレンダーをすぐ拾う）
       toast('Googleカレンダーと連携しました ✓');
       rerender();
     } catch (e) { if (msg) msg.textContent = '⚠️ ' + (e.message || e); toast('⚠️ ' + (e.message || e)); }
@@ -1626,11 +1636,12 @@
     if (!gcalConnected()) return { cls: 'g-pending', text: '📅 Google連携の有効期限切れ（設定で連携し直してください）' };
     return { cls: 'g-pending', text: '📅 Googleカレンダーへ送信待ち' };
   }
-  async function pullCalendar() {
+  async function pullCalendar(forceList) {
     // 直接連携できる場合は Google から直接読む。できない場合だけ v1.5.0 の中継ファイルにフォールバック
+    // forceList=true（手動の「今すぐ取得」・連携し直し・ヘッダーの更新ボタン）ではカレンダー一覧のキャッシュを使わず必ず取り直す
     if (gcalHasClient()) {
       const token = await gcalEnsureToken(false);
-      if (token) return pullCalendarDirect();
+      if (token) return pullCalendarDirect(forceList);
     }
     return pullCalendarLegacy();
   }
@@ -1639,7 +1650,7 @@
     const parse = (f) => { if (!f.exists || !f.text.trim()) return null; try { return JSON.parse(f.text); } catch (e) { return extractJson(f.text); } };
     const c1 = parse(f1); const c2 = parse(f2);
     const before = JSON.stringify([cal.calendar, cal.links]);
-    cal = { calendar: c1 && typeof c1 === 'object' ? c1 : null, links: c2 && typeof c2 === 'object' ? c2 : null, fetchedAt: nowIso(), calendars: cal.calendars, calendarsFetchedAt: cal.calendarsFetchedAt };
+    cal = { calendar: c1 && typeof c1 === 'object' ? c1 : null, links: c2 && typeof c2 === 'object' ? c2 : null, fetchedAt: nowIso(), calendars: cal.calendars, calendarsFetchedAt: cal.calendarsFetchedAt, listError: cal.listError };
     calUi.error = ''; saveCal();
     // コーチが Google から消した予定は、削除の依頼リストから外す
     const dels = calLinkDeleted();
@@ -1757,6 +1768,7 @@
     // 開いたとき、取得が古ければ取り直す（表示中30秒ごと・画面復帰時の自動取得も既にある）
     if (!cal.fetchedAt || Date.now() - new Date(cal.fetchedAt).getTime() > 20000) pullCalendarSoon();
     out.push(sectionHead('📅 カレンダー', 'Googleカレンダーの予定', '<button class="btn primary small" data-action="gevNew">＋ 追加</button>'));
+    if (cal.listError) out.push(`<p class="cal-alert small" role="alert">⚠️ カレンダー一覧を取得できませんでした（${esc(cal.listError)}）。購読カレンダーなどが表示されていない可能性があります。設定 → Googleカレンダー連携で「Googleと連携する」を押し直してください。</p>`);
     const evs = gtabEvents();
     const [gy, gm] = gtab.month.split('-').map(Number);
     const firstDow = new Date(gy, gm - 1, 1).getDay();

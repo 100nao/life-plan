@@ -426,13 +426,10 @@ textarea[readonly] { background: var(--surface-2); }
 .sync-msg { min-height: 1.2em; margin: 8px 0 0; font-weight: 600; }
 .format pre { background: var(--surface-2); padding: 10px; border-radius: 10px; overflow-x: auto; }
 .format summary { cursor: pointer; font-size: 13px; color: var(--primary-strong); font-weight: 600; }
-.sync-dot { color: var(--muted); }
-.sync-dot::after { content: ""; position: absolute; right: 7px; bottom: 9px; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); border: 2px solid var(--bg); }
-.sync-dot.st-ok::after { background: var(--primary); }
-.sync-dot.st-syncing::after { background: #6c95c7; animation: pulse 1s infinite alternate; }
-.sync-dot.st-error::after { background: var(--danger); }
-.sync-dot.st-offline::after { background: var(--warn); }
 @keyframes pulse { from { opacity: .3; } to { opacity: 1; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+#refreshBtn.spinning svg { animation: spin .8s linear infinite; }
+.cal-alert { background: var(--warn-soft); border-radius: 12px; padding: 9px 12px; margin-bottom: 10px; font-weight: 600; }
 
 /* ── FAB・モーダル・トースト ── */
 .fab {

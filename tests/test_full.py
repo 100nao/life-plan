@@ -143,9 +143,16 @@ gem = FakeGemini()
 # ── 偽の Google Calendar API（www.googleapis.com）──
 class FakeGCal:
     def __init__(self):
-        self.events = {}  # id -> event
+        self.events = {}  # id -> event（event['calendarId'] が所属カレンダー。無いものは primary）
         self.calls = []
+        self.writes = []  # (method, calendarId, eventId, body)
         self.n = 0
+        self.calendars = [
+            {'id': 'primary', 'summary': 'メイン', 'backgroundColor': '#039be5', 'accessRole': 'owner', 'primary': True, 'selected': True},
+            {'id': 'work', 'summary': '仕事', 'backgroundColor': '#8e24aa', 'accessRole': 'writer', 'selected': True},
+            {'id': 'holidays', 'summary': '日本の祝日', 'backgroundColor': '#0b8043', 'accessRole': 'reader', 'selected': True},
+            {'id': 'offcal', 'summary': '非表示カレンダー', 'backgroundColor': '#616161', 'accessRole': 'owner', 'selected': False},
+        ]
     def handle(self, route, request):
         cors = {'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS', 'Content-Type': 'application/json'}
         if request.method == 'OPTIONS':
@@ -155,10 +162,15 @@ class FakeGCal:
         self.calls.append(request.method + ' ' + request.url)
         import urllib.parse as up
         u = up.urlparse(request.url)
-        m = re.match(r'/calendar/v3/calendars/primary/events(?:/([^/]+))?$', u.path)
+        if u.path == '/calendar/v3/users/me/calendarList':
+            if request.method == 'GET':
+                return route.fulfill(status=200, headers=cors, body=json.dumps({'items': self.calendars}, ensure_ascii=False))
+            return route.fulfill(status=405, headers=cors, body='{}')
+        m = re.match(r'/calendar/v3/calendars/([^/]+)/events(?:/([^/]+))?$', u.path)
         if not m:
             return route.fulfill(status=404, headers=cors, body='{}')
-        eid = up.unquote(m.group(1)) if m.group(1) else None
+        cid = up.unquote(m.group(1))
+        eid = up.unquote(m.group(2)) if m.group(2) else None
         if request.method == 'GET' and not eid:
             q = up.parse_qs(u.query)
             tmin = (q.get('timeMin') or [''])[0][:10]
@@ -166,6 +178,7 @@ class FakeGCal:
             query = (q.get('q') or [''])[0]
             items = []
             for e in self.events.values():
+                if e.get('calendarId', 'primary') != cid: continue
                 d = (e.get('start') or {}).get('date') or (e.get('start') or {}).get('dateTime', '')[:10]
                 if tmin and d < tmin: continue
                 if tmax and d > tmax: continue
@@ -177,16 +190,20 @@ class FakeGCal:
             body = json.loads(request.post_data or '{}')
             self.n += 1
             body['id'] = f'gev_{self.n}'
+            body['calendarId'] = cid
             self.events[body['id']] = body
+            self.writes.append(('POST', cid, body['id'], body))
             return route.fulfill(status=200, headers=cors, body=json.dumps(body, ensure_ascii=False))
         if eid and eid not in self.events:
             return route.fulfill(status=404, headers=cors, body=json.dumps({'error': {'message': 'Not Found'}}))
         if request.method == 'PATCH':
             body = json.loads(request.post_data or '{}')
             self.events[eid].update(body)
+            self.writes.append(('PATCH', cid, eid, body))
             return route.fulfill(status=200, headers=cors, body=json.dumps(self.events[eid], ensure_ascii=False))
         if request.method == 'DELETE':
             del self.events[eid]
+            self.writes.append(('DELETE', cid, eid, None))
             return route.fulfill(status=204, headers=cors, body='')
         return route.fulfill(status=405, headers=cors, body='{}')
 
@@ -702,7 +719,7 @@ with sync_playwright() as p:
     import io
     tclip = {'x': 0, 'y': tb['y'] - 8, 'width': 390, 'height': tb['height'] + 16}
     frames.append(pg.screenshot(clip=tclip))
-    pg.click('.tabbar a[data-nav=journal]')
+    pg.click('.tabbar a[data-nav=calendar]')
     for ms in (70, 90, 120, 400):
         pg.wait_for_timeout(ms); frames.append(pg.screenshot(clip=tclip))
     mid = Image.open(io.BytesIO(frames[1])); end = Image.open(io.BytesIO(frames[-1]))
@@ -715,13 +732,14 @@ with sync_playwright() as p:
     sheet.save(f'{SHOTS}/sp_tabbar_anim.png')
     pg.evaluate("location.hash = '#later'"); wait_idle(pg, 500)
     check('v2：タブにない画面ではインジケーターを隠す', ind()[2] if pg.locator('.tabbar a.active').count() == 0 or not pg.evaluate("document.querySelector('.tabbar a.active').offsetParent") else True)
+    pg.evaluate("location.hash = '#journal'"); wait_idle(pg, 400)
     # ドロワー
     pg.click('#menuBtn'); wait_idle(pg, 550)
-    check('v2：ドロワーを開く', pg.evaluate("document.body.classList.contains('drawer-open')") and pg.locator('#drawer .drawer-nav a').count() == 13 and pg.get_attribute('#menuBtn', 'aria-expanded') == 'true')
-    check('v2：ドロワーで現在地を表示', pg.locator('#drawer a.active[data-nav=later]').count() == 1)
+    check('v2：ドロワーを開く', pg.evaluate("document.body.classList.contains('drawer-open')") and pg.locator('#drawer .drawer-nav a').count() == 10 and pg.get_attribute('#menuBtn', 'aria-expanded') == 'true')
+    check('v2：ドロワーで現在地を表示', pg.locator('#drawer a.active[data-nav=journal]').count() == 1)
     shot(pg, 'sp_drawer_v2.png')
-    pg.click('#drawer a[data-nav=lessons]'); wait_idle(pg, 550)
-    check('v2：ドロワーから移動して閉じる', '習い事' in pg.title() and not pg.evaluate("document.body.classList.contains('drawer-open')") and pg.is_hidden('#drawerBackdrop'))
+    pg.click('#drawer a[data-nav=habits]'); wait_idle(pg, 550)
+    check('v2：ドロワーから移動して閉じる', '習慣スタンプ' in pg.title() and not pg.evaluate("document.body.classList.contains('drawer-open')") and pg.is_hidden('#drawerBackdrop'))
     pg.click('#menuBtn'); wait_idle(pg, 450); pg.mouse.click(20, 400); wait_idle(pg, 450)
     check('v2：背景タップで閉じる', not pg.evaluate("document.body.classList.contains('drawer-open')"))
     # 背景の選択
@@ -751,7 +769,7 @@ with sync_playwright() as p:
     def dd(n): return (TD - datetime.timedelta(days=n)).isoformat()
     def pomu(done, start, today=None):
         return pg.evaluate("([d, s, t]) => LifePlan.pomu({id: 'x', name: 't', startDate: s, done: d}, t)", [done, start, today or TD.isoformat()])
-    check('バージョン 1.6.0', S(pg, 'LifePlan.version') == '1.6.0')
+    check('バージョン 1.7.0', S(pg, 'LifePlan.version') == '1.7.0')
     check('習慣：state.habits が配列', S(pg, 'Array.isArray(LifePlan.state.habits)'))
     # ぽむのルール
     r = pomu([], dd(0)); check('ぽむ：0日はたまご（stage-1）', r['key'] == 'stage-1' and r['lv'] == 1, r)
@@ -1038,7 +1056,7 @@ with sync_playwright() as p:
     db = pg.locator('#drawer').bounding_box()
     check('スワイプ：右から左へなぞるとメニューが開く', is_open() and pg.is_visible('#drawerBackdrop'))
     check('スワイプ：メニューは右側から出る', db and abs(db['x'] + db['width'] - 390) <= 2 and db['x'] > 30, db)
-    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.6.0' in pg.inner_text('#drawer [data-action=forceUpdate]'))
+    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.7.0' in pg.inner_text('#drawer [data-action=forceUpdate]'))
     shot(pg, 'v131_menu.png')
     swipe(90, 500, 330, 505)
     check('スワイプ：左から右へで閉じる', not is_open())
@@ -1531,7 +1549,84 @@ with sync_playwright() as p:
     check('直接連携：設定カード（連携済み）', pg.evaluate("location.hash = '#settings/gcal'") or True)
     wait_idle(pg, 400)
     check('直接連携：設定に連携カードが出る', pg.locator('#gcalCard').count() == 1 and '連携済み' in pg.inner_text('#gcalCard'))
+    # ── v1.7.0：📅 カレンダータブ（全カレンダー取得・双方向の追加/編集/削除）──
+    gcal_fake.events['wev_1'] = {'id': 'wev_1', 'calendarId': 'work', 'summary': '仕事の会議', 'start': {'dateTime': f'{TD.isoformat()}T10:00:00+09:00'}, 'end': {'dateTime': f'{TD.isoformat()}T11:00:00+09:00'}, 'location': '会議室A'}
+    gcal_fake.events['hev_1'] = {'id': 'hev_1', 'calendarId': 'holidays', 'summary': 'テスト祝日', 'start': {'date': tdp(1)}, 'end': {'date': tdp(2)}}
+    gcal_fake.events['xev_1'] = {'id': 'xev_1', 'calendarId': 'offcal', 'summary': '非表示の予定', 'start': {'date': TD.isoformat()}, 'end': {'date': tdp(1)}}
+    pg.evaluate('LifePlan.pullCalendar()'); wait_js(pg, "LifePlan.calendar.calendar && LifePlan.calendar.calendar.events.some(e => e.id === 'wev_1')", 8000); wait_idle(pg, 300)
+    check('カレンダータブ：calendarList を取得', any('calendarList' in c for c in gcal_fake.calls) and len(S(pg, 'LifePlan.calendar.calendars')) == 4, S(pg, 'LifePlan.calendar.calendars'))
+    check('カレンダータブ：全カレンダーの予定を取得（calendarId・色つき）', S(pg, "LifePlan.calendar.calendar.events.find(e => e.id === 'wev_1').calendarId") == 'work' and S(pg, "LifePlan.calendar.calendar.events.find(e => e.id === 'wev_1').color") == '#8e24aa')
+    check('カレンダータブ：selected でないカレンダーは取得しない', S(pg, "LifePlan.calendar.calendar.events.some(e => e.id === 'xev_1')") is False)
+    pg.evaluate("location.hash = '#calendar'"); wait_idle(pg, 600)
+    check('カレンダータブ：月表示グリッド（42マス）', pg.locator('.gtab-cell').count() == 42 and 'カレンダー' in pg.title())
+    check('カレンダータブ：今日の予定に仕事カレンダーの予定が出る', '仕事の会議' in pg.inner_text('#main') and '仕事' in pg.inner_text('#main'))
+    check('カレンダータブ：予定のある日に色ドット', pg.locator(f'.gtab-cell[data-date="{TD.isoformat()}"] .gtab-dots i').count() >= 1)
+    shot(pg, 'v170_calendar.png')
+    # 追加：仕事カレンダーへ POST される
+    pg.click('[data-action=gevNew]'); wait_idle(pg, 400)
+    pg.fill('form[data-form=gcalEvent] input[name=title]', 'タブから追加')
+    pg.select_option('form[data-form=gcalEvent] select[name=calendarId]', 'work')
+    pg.fill('form[data-form=gcalEvent] input[name=date]', tdp(3))
+    pg.fill('form[data-form=gcalEvent] input[name=startTime]', '14:00')
+    pg.fill('form[data-form=gcalEvent] input[name=endTime]', '15:00')
+    pg.fill('form[data-form=gcalEvent] input[name=location]', '会議室B')
+    pg.click('form[data-form=gcalEvent] button[type=submit]'); wait_idle(pg, 900)
+    posts = [w for w in gcal_fake.writes if w[0] == 'POST' and w[1] == 'work']
+    check('カレンダータブ：作成が正しいカレンダーへ POST', len(posts) == 1 and posts[0][3].get('summary') == 'タブから追加' and posts[0][3].get('start', {}).get('dateTime', '').startswith(tdp(3) + 'T14:00') and posts[0][3].get('location') == '会議室B', posts)
+    new_id = posts[0][2] if posts else ''
+    check('カレンダータブ：作成後にその日のリストへ出る', pg.locator(f'.gtab-ev[data-eid="{new_id}"]').count() == 1 and 'タブから追加' in pg.inner_text('#main'))
+    # 編集：PATCH される
+    pg.click(f'.gtab-ev[data-eid="{new_id}"]'); wait_idle(pg, 400)
+    pg.fill('form[data-form=gcalEvent] input[name=title]', 'タブから編集')
+    pg.click('form[data-form=gcalEvent] button[type=submit]'); wait_idle(pg, 900)
+    patches = [w for w in gcal_fake.writes if w[0] == 'PATCH' and w[2] == new_id]
+    check('カレンダータブ：編集で PATCH', len(patches) == 1 and patches[0][3].get('summary') == 'タブから編集' and gcal_fake.events[new_id]['summary'] == 'タブから編集', patches)
+    check('カレンダータブ：編集がリストに反映', 'タブから編集' in pg.inner_text('#main'))
+    # 読み取り専用カレンダー（reader）は編集できない
+    pg.click(f'.gtab-cell[data-date="{tdp(1)}"]'); wait_idle(pg, 400)
+    check('カレンダータブ：祝日カレンダーの予定に「閲覧のみ」', pg.locator('.gtab-ev[data-eid="hev_1"]').count() == 1 and '閲覧のみ' in pg.inner_text('.gtab-ev[data-eid="hev_1"]'))
+    pg.click('.gtab-ev[data-eid="hev_1"]'); wait_idle(pg, 400)
+    check('カレンダータブ：読み取り専用は編集できない（保存・削除ボタンなし）', pg.locator('form[data-form=gcalEvent] button[type=submit]').count() == 0 and pg.locator('form[data-form=gcalEvent] [data-action=gevDelete]').count() == 0 and pg.locator('form[data-form=gcalEvent] input[name=title]').is_disabled())
+    pg.click('#modal [data-action=closeModal]'); wait_idle(pg, 300)
+    # 削除：DELETE される
+    pg.click(f'.gtab-cell[data-date="{tdp(3)}"]'); wait_idle(pg, 400)
+    pg.click(f'.gtab-ev[data-eid="{new_id}"]'); wait_idle(pg, 400)
+    pg.click('form[data-form=gcalEvent] [data-action=gevDelete]'); wait_idle(pg, 900)
+    dels = [w for w in gcal_fake.writes if w[0] == 'DELETE' and w[2] == new_id]
+    check('カレンダータブ：削除で DELETE', len(dels) == 1 and new_id not in gcal_fake.events, dels)
+    check('カレンダータブ：削除がリストから消える', pg.locator(f'.gtab-ev[data-eid="{new_id}"]').count() == 0)
     pg.evaluate("localStorage.removeItem('lifeplan.gcal')")
+    # ── v1.7.0：TASK画面（全件表示・折りたたみ）とナビ再編 ──
+    tc = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2, locale='ja-JP', timezone_id='Asia/Tokyo', service_workers='block')
+    tp = tc.new_page(); tp.on('pageerror', lambda e: errors.append('TASK ' + str(e)))
+    tseed = {'items': [
+        {'id': 'tk1', 'list': 'task', 'title': 'TASKテスト：タスク', 'status': 'todo', 'createdAt': now, 'updatedAt': now},
+        {'id': 'tk2', 'list': 'wish', 'title': 'TASKテスト：やりたい事', 'status': 'doing', 'createdAt': now, 'updatedAt': now},
+        {'id': 'tk3', 'list': 'later', 'title': 'TASKテスト：後回し', 'status': 'todo', 'createdAt': now, 'updatedAt': now},
+        {'id': 'tk4', 'list': 'inbox', 'title': 'TASKテスト：未整理', 'status': 'todo', 'createdAt': now, 'updatedAt': now},
+        {'id': 'tk5', 'list': 'wish', 'title': 'TASKテスト：完了済み', 'status': 'done', 'completedAt': now, 'createdAt': now, 'updatedAt': now}],
+        'journal': [], 'habits': [], 'lessons': []}
+    tp.goto(URL); wait_idle(tp, 400)
+    tp.evaluate(f"localStorage.setItem('lifeplan.v1', JSON.stringify({json.dumps(tseed, ensure_ascii=False)}))")
+    tp.reload(); wait_idle(tp, 500)
+    tp.evaluate("location.hash = '#wish'"); wait_idle(tp, 500)
+    check('TASK：種別・状態をまたいで全件が出る（既定はすべて）', tp.locator('.task-row').count() == 5 and 'TASK' in tp.title(), tp.locator('.task-row').count())
+    check('TASK：完了済みも既定で出る', tp.locator('.task-row[data-task-row="tk5"]').count() == 1)
+    check('TASK：行は最初たたまれている', tp.evaluate("document.querySelector('.task-row[data-task-row=\"tk1\"]').open") is False)
+    tp.click('.task-row[data-task-row="tk1"] > summary'); wait_idle(tp, 300)
+    check('TASK：行を展開すると詳細・操作が見える', tp.evaluate("document.querySelector('.task-row[data-task-row=\"tk1\"]').open") is True and tp.locator('.task-row[data-task-row="tk1"] .card.item').is_visible())
+    shot(tp, 'v170_task.png')
+    tp.select_option('select[data-change=wishFilter][data-k=list]', 'inbox'); wait_idle(tp, 400)
+    check('TASK：分類＝未整理で未整理だけ出る（未整理タブ廃止の受け皿）', tp.locator('.task-row').count() == 1 and tp.locator('.task-row[data-task-row="tk4"]').count() == 1)
+    tp.select_option('select[data-change=wishFilter][data-k=list]', ''); wait_idle(tp, 400)
+    navs = tp.evaluate("[...document.querySelectorAll('.tabbar a[data-nav]')].filter(a => a.offsetParent).map(a => a.dataset.nav)")
+    check('ナビ：下部タブは5つ（ホーム/マトリクス/TASK/カウントダウン/カレンダー）', navs == ['home', 'matrix', 'wish', 'countdown', 'calendar'], navs)
+    check('ナビ：タブに未整理が無い・ジャーナルはモバイルタブに出ない', tp.locator('.tabbar a[data-nav=inbox]').count() == 0 and tp.evaluate("[...document.querySelectorAll('.tabbar a[data-nav=journal]')].filter(a => a.offsetParent).length") == 0)
+    check('ナビ：メニューに習い事・後回し・未整理・カウントダウンが出ない', tp.locator('#drawer a[data-nav=lessons]').count() == 0 and tp.locator('#drawer a[data-nav=later]').count() == 0 and tp.locator('#drawer a[data-nav=inbox]').count() == 0 and tp.locator('#drawer a[data-nav=countdown]').count() == 0)
+    check('ナビ：メニューにジャーナルとカレンダーは残る', tp.locator('#drawer a[data-nav=journal]').count() == 1 and tp.locator('#drawer a[data-nav=calendar]').count() == 1)
+    tp.evaluate("location.hash = '#calendar'"); wait_idle(tp, 500)
+    check('カレンダータブ：未連携時は設定への案内', 'Googleカレンダーと連携すると予定が見られます' in tp.inner_text('#main') and tp.locator('#main a[href="#settings/gcal"]').count() == 1)
+    tc.close()
     # ── PC ──
     state_dump = pg.evaluate("localStorage.getItem('lifeplan.v1')")
     # ── Service Worker・オフライン（別コンテキスト：同期のモックと分けるため）──
@@ -1557,7 +1652,7 @@ with sync_playwright() as p:
     nav = sp.evaluate("performance.getEntriesByType('navigation')[0].name")
     check('アップデート：?v=<時刻> で読み込み直す', re.search(r'[?&]v=\d{10,}', nav) is not None and sp.evaluate('window.__beforeUpdate') is None, nav)
     check('アップデート：古いキャッシュを削除', 'lifeplan-old-test' not in sp.evaluate('caches.keys()'))
-    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.6.0' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
+    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.7.0' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
     check('アップデート：Service Worker は引き続き有効', sp.evaluate("navigator.serviceWorker.getRegistration().then(r => !!(r && r.active))"))
     swc.set_offline(True)
     sp.reload(); wait_idle(sp, 1200)

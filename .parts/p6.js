@@ -207,6 +207,16 @@
       if (!(await confirmDialog('この端末に保存した Gemini APIキーを削除します。', '削除する', true))) return;
       ai.key = ''; saveAi(); aiUi.showKey = false; rerender(); toast('APIキーを削除しました');
     },
+    gevNew: () => openGcalEventEditor(),
+    gevOpen: (d) => openGcalEventEditor(d.cid, d.eid),
+    gevDelete: (d) => deleteGcalEvent(d.cid, d.eid),
+    gtabDay: (d) => { gtab.day = d.date; gtab.month = d.date.slice(0, 7); rerender(); },
+    gtabMonth: (d) => {
+      const dir = Number(d.dir) || 0;
+      if (dir === 0) { const t = todayStr(); gtab.month = t.slice(0, 7); gtab.day = t; }
+      else { const [y, m] = gtab.month.split('-').map(Number); gtab.month = monthKey(new Date(y, m - 1 + dir, 1)); }
+      rerender();
+    },
     gcalConnect: () => gcalConnectInteractive(),
     gcalRefresh: async () => { try { await pullCalendar(); rerender(); toast('Googleカレンダーを取得しました ✓'); } catch (e) { toast('⚠️ ' + (e.message || e)); } },
     gcalDisconnect: async () => {
@@ -239,6 +249,7 @@
     const d = el.dataset;
     switch (d.change) {
       case 'wishFilter': ui.wish[d.k] = el.value; rerender(); break;
+      case 'gevAllDay': { const f = el.closest('form'); if (f) $$('input[type=time]', f).forEach((i) => { i.disabled = el.checked; }); break; }
       case 'laterSort': ui.laterSort = el.value; rerender(); break;
       case 'stepText': { const [i, s] = stepOf(d); if (s) { const v = el.value.trim(); if (v) { s.text = v; touch(i); save(); } else el.value = s.text; } break; }
       case 'stepDue': { const [i, s] = stepOf(d); if (s) { s.due = el.value || ''; touch(i); save(); rerender(); } break; }
@@ -280,6 +291,7 @@
       case 'journal': submitJournal(f); break;
       case 'habit': submitHabit(f); break;
       case 'countdown': submitCountdown(f); break;
+      case 'gcalEvent': submitGcalEvent(f); break;
       case 'syncSetup': testConnection(f); break;
       case 'gcalSetup': {
         const cid = String(fd.get('clientId') || '').trim();

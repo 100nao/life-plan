@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.6.0';
+  const APP_VERSION = '1.7.0';
   const DEFAULT_CATEGORIES = ['旅行', '仕事/キャリア', '健康', '家族', '趣味', '学び', 'お金', 'その他'];
   const IMPORTANCE = { high: '高', mid: '中', low: '低' };
   const IMPORTANCE_ORDER = { high: 0, mid: 1, low: 2 };
@@ -297,7 +297,7 @@
 
   // ───────────────────────── UI の一時状態 ─────────────────────────
   const ui = {
-    wish: { cat: '', imp: '', tf: '', status: 'open', sort: 'updated' },
+    wish: { cat: '', imp: '', tf: '', status: 'all', list: '', sort: 'updated' }, // TASK画面のフィルター（既定は全件表示）
     laterSort: 'updated',
     matrixFilter: 'all',
     journalQuery: '',

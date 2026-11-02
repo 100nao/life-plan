@@ -1408,11 +1408,15 @@
   // v1.5.0 の中継ファイル（data/calendar.json / calendar-links.json）読みは、未連携時のフォールバックとして残す。
   const CAL_KEY = 'lifeplan.calendar';
   const calUi = { error: '', open: false };
-  let cal = (() => { try { const o = JSON.parse(localStorage.getItem(CAL_KEY) || '{}'); return { calendar: o.calendar || null, links: o.links || null, fetchedAt: o.fetchedAt || '' }; } catch (e) { return { calendar: null, links: null, fetchedAt: '' }; } })();
+  let cal = (() => { try { const o = JSON.parse(localStorage.getItem(CAL_KEY) || '{}'); return { calendar: o.calendar || null, links: o.links || null, fetchedAt: o.fetchedAt || '', calendars: Array.isArray(o.calendars) ? o.calendars : [], calendarsFetchedAt: o.calendarsFetchedAt || '' }; } catch (e) { return { calendar: null, links: null, fetchedAt: '', calendars: [], calendarsFetchedAt: '' }; } })();
   const saveCal = () => { try { localStorage.setItem(CAL_KEY, JSON.stringify(cal)); } catch (e) { /* noop */ } };
   const GCAL_KEY = 'lifeplan.gcal';
-  const GCAL_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
-  const GCAL_API = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
+  // calendar.events（予定の読み書き）＋ calendarlist.readonly（カレンダー一覧：v1.7.0 のカレンダータブ用）
+  const GCAL_SCOPE = 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly';
+  const GCAL_BASE = 'https://www.googleapis.com/calendar/v3';
+  const GCAL_API = GCAL_BASE + '/calendars/primary/events';
+  const GCAL_LIST_API = GCAL_BASE + '/users/me/calendarList';
+  const gcalEventsUrl = (cid) => `${GCAL_BASE}/calendars/${encodeURIComponent(cid || 'primary')}/events`;
   let gcal = (() => { try { const o = JSON.parse(localStorage.getItem(GCAL_KEY) || '{}'); return { clientId: String(o.clientId || ''), token: String(o.token || ''), expiresAt: Number(o.expiresAt || 0) }; } catch (e) { return { clientId: '', token: '', expiresAt: 0 }; } })();
   const saveGcal = () => { try { localStorage.setItem(GCAL_KEY, JSON.stringify(gcal)); } catch (e) { /* noop */ } };
   const gcalHasClient = () => !!gcal.clientId;
@@ -1458,18 +1462,18 @@
     if (!res.ok && res.status !== 404) { let m = ''; try { m = ((await res.json()).error || {}).message || ''; } catch (e) { /* noop */ } throw new Error(`Googleカレンダーエラー（${res.status}）${m}`); }
     return res;
   }
-  const gcalEventToLocal = (e) => {
+  const gcalEventToLocal = (e, meta = {}) => {
     if (!e || !e.id || e.status === 'cancelled') return null;
     const allDay = !!(e.start && e.start.date);
     const start = allDay ? e.start.date : (e.start && e.start.dateTime) || '';
     const end = allDay ? (e.end && e.end.date) || '' : (e.end && e.end.dateTime) || '';
     if (!start) return null;
-    return { id: String(e.id), title: String(e.summary || '（無題の予定）'), start: String(start), end: String(end), allDay, location: String(e.location || '') };
+    return { id: String(e.id), calendarId: String(meta.calendarId || 'primary'), color: String(meta.color || ''), title: String(e.summary || '（無題の予定）'), start: String(start), end: String(end), allDay, location: String(e.location || ''), description: String(e.description || '') };
   };
-  async function gcalListEvents(timeMin, timeMax, q) {
+  async function gcalListEventsFor(calendarId, timeMin, timeMax, q, meta = {}) {
     const out = []; let pageToken = '';
     for (let page = 0; page < 5; page++) {
-      const u = new URL(GCAL_API);
+      const u = new URL(gcalEventsUrl(calendarId));
       u.searchParams.set('timeMin', timeMin); u.searchParams.set('timeMax', timeMax);
       u.searchParams.set('singleEvents', 'true'); u.searchParams.set('orderBy', 'startTime'); u.searchParams.set('maxResults', '250');
       if (q) u.searchParams.set('q', q);
@@ -1477,12 +1481,36 @@
       const res = await gcalApi(u.toString());
       if (res.status === 404) break;
       const j = await res.json();
-      (j.items || []).forEach((e) => { const l = gcalEventToLocal(e); if (l) out.push(l); });
+      (j.items || []).forEach((e) => { const l = gcalEventToLocal(e, { calendarId, color: meta.color }); if (l) out.push(l); });
       pageToken = j.nextPageToken || '';
       if (!pageToken) break;
     }
     return out;
   }
+  async function gcalListEvents(timeMin, timeMax, q) { return gcalListEventsFor('primary', timeMin, timeMax, q); }
+  // カレンダー一覧（calendarList）。失敗したら null（呼び出し側で primary だけにフォールバック）
+  async function gcalFetchCalendars() {
+    try {
+      const out = []; let pageToken = '';
+      for (let page = 0; page < 5; page++) {
+        const u = new URL(GCAL_LIST_API);
+        u.searchParams.set('maxResults', '250');
+        if (pageToken) u.searchParams.set('pageToken', pageToken);
+        const res = await gcalApi(u.toString());
+        if (res.status === 404) break;
+        const j = await res.json();
+        (j.items || []).forEach((c) => {
+          if (!c || !c.id || c.deleted) return;
+          out.push({ id: String(c.id), summary: String(c.summaryOverride || c.summary || c.id), color: String(c.backgroundColor || '#4285f4'), accessRole: String(c.accessRole || 'reader'), primary: !!c.primary, selected: c.selected !== false });
+        });
+        pageToken = j.nextPageToken || '';
+        if (!pageToken) break;
+      }
+      return out;
+    } catch (e) { return null; }
+  }
+  const gcalCalendarById = (cid) => (Array.isArray(cal.calendars) ? cal.calendars : []).find((c) => c.id === cid) || null;
+  const gcalWritableCal = (c) => !!c && (c.accessRole === 'owner' || c.accessRole === 'writer');
   async function gcalDeleteEvent(gid) {
     if (!gid) return null;
     return gcalApi(GCAL_API + '/' + encodeURIComponent(gid), { method: 'DELETE' }); // 404（すでに無い）は成功扱い
@@ -1514,17 +1542,29 @@
   }
   async function pullCalendarDirect() {
     const t0 = new Date(); t0.setHours(0, 0, 0, 0);
-    const t90 = new Date(t0.getTime() + 90 * 86400000);
+    const tPast = new Date(t0.getTime() - 30 * 86400000);
+    const t180 = new Date(t0.getTime() + 180 * 86400000);
     const t2y = new Date(t0.getTime() + 731 * 86400000);
-    const [near, hg] = await Promise.all([
-      gcalListEvents(t0.toISOString(), t90.toISOString(), ''),
-      gcalListEvents(t0.toISOString(), t2y.toISOString(), '⏳'),
-    ]);
-    const byId = new Map();
-    [...near, ...hg].forEach((e) => byId.set(e.id, e));
-    const events = [...byId.values()].sort((a, b) => String(a.start).localeCompare(String(b.start)));
+    // カレンダー一覧は10分キャッシュ（毎回の取得を軽くする）。失敗したら前回分、無ければ primary のみで続行
+    let calendars = Array.isArray(cal.calendars) ? cal.calendars : [];
+    if (!calendars.length || !cal.calendarsFetchedAt || Date.now() - new Date(cal.calendarsFetchedAt).getTime() > 600000) {
+      const fetched = await gcalFetchCalendars();
+      if (fetched && fetched.length) { calendars = fetched; cal.calendarsFetchedAt = nowIso(); }
+    }
+    if (!calendars.length) calendars = [{ id: 'primary', summary: 'メインカレンダー', color: '#039be5', accessRole: 'owner', primary: true, selected: true }];
+    const primaryCal = calendars.find((c) => c.primary) || calendars.find((c) => c.id === 'primary') || calendars[0];
+    // カレンダータブ用：選択中（selected）の全カレンダーから 過去30日〜未来180日
+    const jobs = calendars.filter((c) => c.selected).map((c) => gcalListEventsFor(c.id, tPast.toISOString(), t180.toISOString(), '', c));
+    // カウントダウン／ホーム用：primary の「⏳」は2年先まで（従来通り。primary の通常予定は上の範囲に含まれる）
+    jobs.push(gcalListEventsFor(primaryCal.id, t0.toISOString(), t2y.toISOString(), '⏳', primaryCal));
+    const settled = await Promise.allSettled(jobs);
+    const ok = settled.filter((s) => s.status === 'fulfilled');
+    if (!ok.length) throw (settled[0] && settled[0].reason) || new Error('Googleカレンダーを取得できませんでした');
+    const byKey = new Map();
+    ok.forEach((s) => s.value.forEach((e) => byKey.set(e.calendarId + '\n' + e.id, e)));
+    const events = [...byKey.values()].sort((a, b) => String(a.start).localeCompare(String(b.start)));
     const before = JSON.stringify(cal.calendar);
-    cal = { calendar: { updatedAt: nowIso(), events }, links: cal.links, fetchedAt: nowIso() };
+    cal = { calendar: { updatedAt: nowIso(), events }, calendars, calendarsFetchedAt: cal.calendarsFetchedAt, links: cal.links, fetchedAt: nowIso() };
     calUi.error = ''; saveCal();
     await flushGcalDeletes();
     if (before !== JSON.stringify(cal.calendar)) rerenderSoft();
@@ -1542,6 +1582,7 @@
         <p class="sync-msg small" id="gcalMsg"></p>
       </form>
       <ul class="small muted note-list">
+        <li>メニューの「📅 カレンダー」タブでは、全カレンダーの予定を見て、その場で追加・編集・削除できます（読み取り専用のカレンダーは表示のみ）。カレンダー一覧の許可が足りないときは「Googleと連携する」を押し直してください。</li>
         <li>クライアントIDの作り方：<a class="link" href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer">Google Cloud Console ↗</a> で Google Calendar API を有効化し、「OAuth クライアントID（ウェブアプリケーション）」を作成。承認済みの JavaScript 生成元に <b>${esc(location.origin)}</b> を登録してください。</li>
         <li>クライアントIDとアクセストークンはこの端末だけに保存され、GitHub 同期・バックアップには含まれません。トークンの有効期限が切れたら「Googleと連携する」を押し直してください。</li>
         <li>連携は端末ごとです。使う端末ごとに、クライアントIDの保存と連携が必要です（同じクライアントIDで大丈夫です）。</li>
@@ -1568,7 +1609,7 @@
   function normEvent(e) {
     if (!e || typeof e !== 'object' || !e.id) return null;
     const date = evDate(e.start); if (!date) return null;
-    return { id: String(e.id), title: String(e.title || e.summary || '（無題の予定）'), start: String(e.start), end: String(e.end || ''), date, allDay: e.allDay === true || isDateStr(String(e.start)), location: String(e.location || '') };
+    return { id: String(e.id), calendarId: String(e.calendarId || 'primary'), color: String(e.color || ''), title: String(e.title || e.summary || '（無題の予定）'), start: String(e.start), end: String(e.end || ''), date, allDay: e.allDay === true || isDateStr(String(e.start)), location: String(e.location || ''), description: String(e.description || '') };
   }
   const calEvents = () => ((cal.calendar && Array.isArray(cal.calendar.events)) ? cal.calendar.events : []).map(normEvent).filter(Boolean).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
   const calLinks = () => (cal.links && cal.links.links && typeof cal.links.links === 'object' ? cal.links.links : {});
@@ -1598,7 +1639,7 @@
     const parse = (f) => { if (!f.exists || !f.text.trim()) return null; try { return JSON.parse(f.text); } catch (e) { return extractJson(f.text); } };
     const c1 = parse(f1); const c2 = parse(f2);
     const before = JSON.stringify([cal.calendar, cal.links]);
-    cal = { calendar: c1 && typeof c1 === 'object' ? c1 : null, links: c2 && typeof c2 === 'object' ? c2 : null, fetchedAt: nowIso() };
+    cal = { calendar: c1 && typeof c1 === 'object' ? c1 : null, links: c2 && typeof c2 === 'object' ? c2 : null, fetchedAt: nowIso(), calendars: cal.calendars, calendarsFetchedAt: cal.calendarsFetchedAt };
     calUi.error = ''; saveCal();
     // コーチが Google から消した予定は、削除の依頼リストから外す
     const dels = calLinkDeleted();
@@ -1682,6 +1723,141 @@
     }
     if (past.length) out.push(`<details class="cd-past-wrap"><summary class="month-head">終わった予定（${past.length}件）</summary>${past.map(countdownCard).join('')}</details>`);
     return out.join('');
+  }
+  // ───────────────────────── 📅 カレンダータブ（v1.7.0） ─────────────────────────
+  // 全カレンダーの予定を月表示＋日リストで見て、その場で追加・編集・削除する（Google Calendar API 直接）。
+  // 予定データは cal.calendar.events（全カレンダー分・calendarId と色つき）をそのまま使う。
+  const gtab = { month: '', day: '' };
+  function gtabInit() { const t = todayStr(); if (!gtab.day) gtab.day = t; if (!gtab.month) gtab.month = t.slice(0, 7); }
+  const gtabEvents = () => calEvents();
+  function gevOnDay(e, day) {
+    if (e.allDay) { const endEx = e.end && e.end > e.date ? e.end : addDays(e.date, 1); return day >= e.date && day < endEx; }
+    return e.date === day;
+  }
+  const gevTime = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : `${d.getHours()}:${pad(d.getMinutes())}`; };
+  function gevTimeLabel(e) {
+    if (e.allDay) return '終日';
+    const s = gevTime(e.start); const en = e.end ? gevTime(e.end) : '';
+    return en && en !== s ? `${s}–${en}` : s;
+  }
+  function viewCalendar() {
+    gtabInit();
+    const out = [];
+    if (!gcalHasClient()) {
+      out.push(sectionHead('📅 カレンダー', 'Googleカレンダーの予定'));
+      out.push(emptyState('Googleカレンダーと連携すると予定が見られます', '設定 →「📅 Googleカレンダー連携」でクライアントIDを保存して「Googleと連携する」を押すと、このタブに全カレンダーの予定が出て、その場で追加・編集・削除もできます。', '<a class="btn primary" href="#settings/gcal">設定を開く</a>'));
+      return out.join('');
+    }
+    if (!gcalConnected()) {
+      out.push(sectionHead('📅 カレンダー', 'Googleカレンダーの予定'));
+      out.push(emptyState('連携の有効期限が切れています', '設定 →「📅 Googleカレンダー連携」で「Googleと連携する」を押し直してください。', '<a class="btn primary" href="#settings/gcal">設定を開く</a>'));
+      if (cal.calendar) out.push(calSyncLine());
+      return out.join('');
+    }
+    // 開いたとき、取得が古ければ取り直す（表示中30秒ごと・画面復帰時の自動取得も既にある）
+    if (!cal.fetchedAt || Date.now() - new Date(cal.fetchedAt).getTime() > 20000) pullCalendarSoon();
+    out.push(sectionHead('📅 カレンダー', 'Googleカレンダーの予定', '<button class="btn primary small" data-action="gevNew">＋ 追加</button>'));
+    const evs = gtabEvents();
+    const [gy, gm] = gtab.month.split('-').map(Number);
+    const firstDow = new Date(gy, gm - 1, 1).getDay();
+    const gridStart = new Date(gy, gm - 1, 1 - firstDow);
+    const today = todayStr();
+    let cells = '';
+    for (let i = 0; i < 42; i++) {
+      const d = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + i);
+      const ds = todayStr(d);
+      const dayEvs = evs.filter((e) => gevOnDay(e, ds));
+      const colors = [...new Set(dayEvs.map((e) => e.color).filter(Boolean))].slice(0, 3);
+      cells += `<button type="button" class="gtab-cell ${ds.slice(0, 7) !== gtab.month ? 'other' : ''} ${ds === today ? 'today' : ''} ${ds === gtab.day ? 'sel' : ''}" data-action="gtabDay" data-date="${ds}" aria-label="${ds}"><span class="gtab-d">${d.getDate()}</span><span class="gtab-dots">${colors.map((c) => `<i style="background:${esc(c)}"></i>`).join('')}</span></button>`;
+    }
+    const legend = (cal.calendars || []).filter((c) => c.selected).map((c) => `<span class="gtab-cal"><i style="background:${esc(c.color)}"></i>${esc(trunc(c.summary, 14))}</span>`).join('');
+    out.push(`<section class="card gtab-card">
+      <div class="gtab-nav"><button type="button" class="btn ghost small" data-action="gtabMonth" data-dir="-1" aria-label="前の月">‹</button><h2>${gy}年${gm}月</h2><span class="btn-row"><button type="button" class="btn ghost small" data-action="gtabMonth" data-dir="0">今日</button><button type="button" class="btn ghost small" data-action="gtabMonth" data-dir="1" aria-label="次の月">›</button></span></div>
+      <div class="gtab-grid dow">${'日月火水木金土'.split('').map((w) => `<span>${w}</span>`).join('')}</div>
+      <div class="gtab-grid">${cells}</div>
+      ${legend ? `<div class="gtab-legend">${legend}</div>` : ''}
+    </section>`);
+    const day = gtab.day;
+    const list = evs.filter((e) => gevOnDay(e, day)).sort((a, b) => (a.allDay === b.allDay ? String(a.start).localeCompare(String(b.start)) : a.allDay ? -1 : 1));
+    out.push(`<section class="card"><div class="card-head"><h2>${fmtDate(day)}</h2><span class="muted small">${list.length}件</span></div>
+      ${list.length ? `<ul class="plain-list">${list.map((e) => { const cm = gcalCalendarById(e.calendarId); const ro = !gcalWritableCal(cm); return `<li><button type="button" class="gtab-ev" data-action="gevOpen" data-cid="${esc(e.calendarId)}" data-eid="${esc(e.id)}"><span class="gtab-dot" style="background:${esc(e.color || (cm && cm.color) || '#4285f4')}"></span><span class="gtab-time">${esc(gevTimeLabel(e))}</span><span class="grow"><b>${esc(trunc(e.title, 40))}</b><span class="muted small"> ${esc(cm ? cm.summary : '')}${e.location ? '・' + esc(trunc(e.location, 20)) : ''}</span></span>${ro ? '<span class="chip">閲覧のみ</span>' : ''}</button></li>`; }).join('')}</ul>` : '<p class="muted small">この日の予定はありません</p>'}
+    </section>`);
+    out.push(calSyncLine());
+    return out.join('');
+  }
+  function openGcalEventEditor(cid, eid) {
+    const ev = eid ? gtabEvents().find((e) => e.id === eid && e.calendarId === cid) : null;
+    if (eid && !ev) { toast('予定が見つかりませんでした（再取得してください）'); return; }
+    const meta = ev ? gcalCalendarById(ev.calendarId) : null;
+    const ro = ev ? !gcalWritableCal(meta) : false;
+    const writable = (cal.calendars || []).filter(gcalWritableCal);
+    if (!ev && !writable.length) { toast('書き込めるカレンダーがありません'); return; }
+    const defCal = (writable.find((c) => c.primary) || writable[0] || {}).id || 'primary';
+    const v = ev ? {
+      title: ev.title, calendarId: ev.calendarId, date: ev.date, allDay: ev.allDay,
+      startTime: ev.allDay ? '10:00' : (gevTime(ev.start) || '10:00'),
+      endTime: ev.allDay ? '11:00' : (ev.end ? gevTime(ev.end) : ''),
+      location: ev.location || '', description: ev.description || '',
+    } : { title: '', calendarId: defCal, date: gtab.day, allDay: false, startTime: '10:00', endTime: '11:00', location: '', description: '' };
+    const dis = ro ? 'disabled' : '';
+    openModal(`${modalHead(ev ? (ro ? '予定の詳細' : '予定を編集') : '予定を追加')}
+      <form data-form="gcalEvent" data-cid="${esc(ev ? ev.calendarId : '')}" data-eid="${esc(ev ? ev.id : '')}">
+        <label class="field"><span class="field-label">タイトル</span><input name="title" value="${esc(v.title)}" required autocomplete="off" placeholder="例：会議、通院" ${ev ? '' : 'autofocus'} ${dis}></label>
+        <label class="field"><span class="field-label">カレンダー</span><select name="calendarId" ${ev || ro ? 'disabled' : ''}>${(ev ? [meta || { id: v.calendarId, summary: v.calendarId }] : writable).map((c) => `<option value="${esc(c.id)}" ${c.id === v.calendarId ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}</select></label>
+        <label class="field"><span class="field-label">日付</span><input type="date" name="date" value="${esc(v.date)}" required ${dis}></label>
+        <label class="check-line"><input type="checkbox" name="allDay" data-change="gevAllDay" ${v.allDay ? 'checked' : ''} ${dis}> 終日</label>
+        <div class="gtab-times">
+          <label class="field"><span class="field-label">開始</span><input type="time" name="startTime" value="${esc(v.startTime)}" ${v.allDay || ro ? 'disabled' : ''}></label>
+          <label class="field"><span class="field-label">終了</span><input type="time" name="endTime" value="${esc(v.endTime)}" ${v.allDay || ro ? 'disabled' : ''}></label>
+        </div>
+        <label class="field"><span class="field-label">場所（任意）</span><input name="location" value="${esc(v.location)}" autocomplete="off" ${dis}></label>
+        <label class="field"><span class="field-label">メモ（任意）</span><textarea name="description" rows="3" ${dis}>${esc(v.description)}</textarea></label>
+        ${ro ? '<p class="muted small">このカレンダーは読み取り専用です。変更・削除は Google カレンダーで行ってください。</p>' : ''}
+        <div class="btn-row between">${ev && !ro ? `<button type="button" class="btn ghost danger" data-action="gevDelete" data-cid="${esc(ev.calendarId)}" data-eid="${esc(ev.id)}">削除</button>` : '<span></span>'}
+          <span class="btn-row"><button type="button" class="btn ghost" data-action="closeModal">${ro ? '閉じる' : 'キャンセル'}</button>${ro ? '' : `<button class="btn primary" type="submit">${ev ? '保存' : '追加'}</button>`}</span></div>
+      </form>`);
+  }
+  async function submitGcalEvent(form) {
+    const fd = new FormData(form);
+    const title = String(fd.get('title') || '').trim();
+    if (!title) { toast('タイトルを入れてください'); return; }
+    const date = String(fd.get('date') || '');
+    if (!isDateStr(date)) { toast('日付を選んでください'); return; }
+    const eid = form.dataset.eid || '';
+    const cid = eid ? form.dataset.cid : String(fd.get('calendarId') || '');
+    if (!cid) { toast('カレンダーを選んでください'); return; }
+    const allDay = fd.get('allDay') === 'on';
+    const body = { summary: title, location: String(fd.get('location') || '').trim(), description: String(fd.get('description') || '').trim() };
+    if (allDay) {
+      let days = 1; // 終日の複数日予定は、編集でも日数を保つ
+      if (eid) { const old = gtabEvents().find((e) => e.id === eid && e.calendarId === cid); if (old && old.allDay && old.end && old.end > old.date) days = Math.max(1, Math.round((new Date(old.end + 'T00:00:00Z') - new Date(old.date + 'T00:00:00Z')) / 86400000)); }
+      body.start = { date }; body.end = { date: addDays(date, days) };
+    } else {
+      const st = String(fd.get('startTime') || '10:00');
+      let en = String(fd.get('endTime') || '');
+      if (!en) { const [h, m] = st.split(':').map(Number); en = `${pad(Math.min(23, h + 1))}:${pad(m || 0)}`; if (en <= st) en = '23:59'; }
+      if (en <= st) { toast('終了は開始より後にしてください'); return; }
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Tokyo';
+      body.start = { dateTime: `${date}T${st}:00`, timeZone: tz };
+      body.end = { dateTime: `${date}T${en}:00`, timeZone: tz };
+    }
+    try {
+      if (eid) await gcalApi(gcalEventsUrl(cid) + '/' + encodeURIComponent(eid), { method: 'PATCH', body: JSON.stringify(body) });
+      else await gcalApi(gcalEventsUrl(cid), { method: 'POST', body: JSON.stringify(body) });
+      closeModal();
+      gtab.day = date; gtab.month = date.slice(0, 7);
+      toast(eid ? '予定を更新しました ✓' : '予定を追加しました ✓');
+      await pullCalendar().catch(() => {});
+      rerender();
+    } catch (e) { toast('⚠️ ' + (e.message || e)); }
+  }
+  async function deleteGcalEvent(cid, eid) {
+    try {
+      await gcalApi(gcalEventsUrl(cid) + '/' + encodeURIComponent(eid), { method: 'DELETE' });
+      closeModal(); toast('予定を削除しました');
+      await pullCalendar().catch(() => {});
+      rerender();
+    } catch (e) { toast('⚠️ ' + (e.message || e)); }
   }
   function homeCountdownCard() {
     const { up } = sortedCountdowns();

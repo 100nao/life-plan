@@ -275,11 +275,13 @@
     return out.join('');
   }
 
-  // ───────────────────────── 画面: やりたい事 ─────────────────────────
+  // ───────────────────────── 画面: TASK（v1.7.0 で旧「やりたい事」を全件表示に改名） ─────────────────────────
+  // 分類（タスク／やりたい事／後回し／未整理）・状態を問わず全アイテムを出す。絞り込みはフィルターで行う。
+  // 未整理タブ廃止に伴い、未整理の項目にも ここの「分類： 未整理」フィルターで必ず届く。
   function viewWish() {
     const w = ui.wish;
-    const all = state.items.filter((i) => i.list === 'wish');
-    const list = all.filter((i) => (!w.cat || i.category === w.cat) && (!w.imp || i.importance === w.imp) && (!w.tf || i.timeframe === w.tf)
+    const all = state.items;
+    const list = all.filter((i) => (!w.list || i.list === w.list) && (!w.cat || i.category === w.cat) && (!w.imp || i.importance === w.imp) && (!w.tf || i.timeframe === w.tf)
       && (w.status === 'all' ? true : w.status === 'open' ? i.status !== 'done' : i.status === w.status));
     const sorters = {
       updated: (a, b) => b.updatedAt.localeCompare(a.updatedAt),
@@ -291,20 +293,21 @@
     };
     list.sort(sorters[w.sort] || sorters.updated);
     const done = all.filter((i) => i.status === 'done').length;
-    const out = [sectionHead('やりたい事', `人生でやりたい事・${all.length}件中 ${done}件 完了`, `<button class="btn primary small" data-action="quickAdd" data-list="wish">＋ 追加</button>`)];
+    const out = [sectionHead('TASK', `すべてのタスク・${all.length}件中 ${done}件 完了`, `<button class="btn primary small" data-action="quickAdd" data-list="task">＋ 追加</button>`)];
     if (all.length) out.push(progressBar(done, all.length));
     out.push(`<div class="filters">
+      <select data-change="wishFilter" data-k="list" aria-label="分類">${options(LISTS, w.list, '分類: すべて')}</select>
       <select data-change="wishFilter" data-k="cat" aria-label="カテゴリ">${catOptions(w.cat, 'カテゴリ: すべて')}</select>
       <select data-change="wishFilter" data-k="imp" aria-label="重要度">${options(IMPORTANCE, w.imp, '重要度: すべて')}</select>
       <select data-change="wishFilter" data-k="tf" aria-label="時期">${options(TIMEFRAME, w.tf, '時期: すべて')}</select>
-      <select data-change="wishFilter" data-k="status" aria-label="状態">${opt('open', '未完了のみ', w.status)}${opt('all', '状態: すべて', w.status)}${options(STATUS, w.status)}</select>
+      <select data-change="wishFilter" data-k="status" aria-label="状態">${opt('all', '状態: すべて', w.status)}${opt('open', '未完了のみ', w.status)}${options(STATUS, w.status)}</select>
       <select data-change="wishFilter" data-k="sort" aria-label="並び替え">${opt('updated', '並び: 更新順', w.sort)}${opt('created', '並び: 作成順', w.sort)}${opt('importance', '並び: 重要度', w.sort)}${opt('timeframe', '並び: 時期', w.sort)}${opt('date', '並び: 目標日', w.sort)}${opt('title', '並び: 名前', w.sort)}</select>
     </div>`);
     if (!all.length) {
-      out.push(emptyState('やりたい事はまだありません', '行ってみたい場所、挑戦したいこと、身につけたいこと…。思いついたら「＋」から追加しましょう。',
-        `<button class="btn primary" data-action="quickAdd" data-list="wish">＋ やりたい事を追加</button><button class="btn soft" data-action="addSamples">サンプルを追加</button>`));
+      out.push(emptyState('タスクはまだありません', 'やるべきこと、行ってみたい場所、挑戦したいこと…。思いついたら「＋」から追加しましょう。',
+        `<button class="btn primary" data-action="quickAdd" data-list="task">＋ タスクを追加</button><button class="btn soft" data-action="addSamples">サンプルを追加</button>`));
     } else if (!list.length) out.push('<p class="muted center pad">条件に合う項目はありません。</p>');
-    else out.push(`<div class="list">${list.map((i) => itemCard(i, 'wish')).join('')}</div>`);
+    else out.push(`<div class="list">${list.map((i) => `<details class="task-row" data-task-row="${i.id}"><summary><span class="task-row-ico" aria-hidden="true">${itemIcon(i)}</span><span class="grow"><b>${esc(trunc(i.title, 42))}</b></span>${chip(LISTS[i.list], 'list')}${i.status === 'done' ? chip('完了', 'doing') : ''}<span class="task-row-chev" aria-hidden="true">›</span></summary><div class="task-row-body">${itemCard(i, 'wish')}</div></details>`).join('')}</div>`);
     return out.join('');
   }
 

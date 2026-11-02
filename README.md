@@ -1,7 +1,7 @@
 # ライフプラン（個人用 PWA）
 
 やりたい事・タスク・習い事・ジャーナルをまとめて整理する、自分専用のライフプランアプリです。
-ビルド不要の静的ファイル（HTML / CSS / JS）だけで動き、外部ライブラリや CDN は使いません。オフラインでも使えます。
+ビルド不要の静的ファイル（HTML / CSS / JS）だけで動き、外部ライブラリや CDN は使いません（例外は Googleカレンダー連携のための Google Identity Services のスクリプトのみ）。オフラインでも使えます。
 
 - データはこのブラウザの **localStorage**（ジャーナルの写真は **IndexedDB**）に保存されます。コードやリポジトリにはデータは含まれません。
 - 任意で **GitHub 同期**（プライベートリポジトリ `100nao/life-plan-data`）をオンにすると、AIコーチがデータを読み、アドバイスを返せます。
@@ -11,7 +11,7 @@
 
 | ファイル | 内容 |
 |---|---|
-| `index.html` | 画面の骨組み。iOS 用 meta、CSP（通信先は自分自身・`api.github.com`・`generativelanguage.googleapis.com`（Gemini）のみ） |
+| `index.html` | 画面の骨組み。iOS 用 meta、CSP（通信先は自分自身・`api.github.com`・`generativelanguage.googleapis.com`（Gemini）・`accounts.google.com` と `www.googleapis.com`（Googleカレンダー直接連携）） |
 | `styles.css` | スタイル（ライト／ダーク、スマホ優先、PCではサイドバー） |
 | `app.js` | アプリ本体（`.parts/p1〜p6.js` を連結したもの） |
 | `sw.js` | Service Worker（全ファイルをキャッシュしてオフライン対応。GitHub API・Gemini API はキャッシュしない） |
@@ -55,6 +55,8 @@
 - **v1.5.0**
   - **⏳ カウントダウン**：大きな予定・目標の日を選ぶと「あと N 日」を毎日数える（今日は「今日！」、過ぎたら「N日経過」で「終わった予定」へ）。作成日→目標日の進み具合バー、近い順、編集・削除は元に戻せる。ホームに近い3件
   - **📅 Googleカレンダー連携（コーチ経由）**：アプリは Google にログインしません。毎朝のコーチが `data/calendar.json` / `data/calendar-links.json` を書き、アプリは読むだけ（くわしくは下の「Googleカレンダー連携」）
+- **v1.6.0**
+  - **📅 Googleカレンダー直接連携**：アプリ自身が Google Calendar API を直接読み書きします。中継ファイルも毎朝のコーチも不要で、Google側の追加・変更はアプリに戻ったその場で（表示中は30秒ごとに）反映され、カウントダウンの保存はその瞬間に Google へ反映されます（くわしくは下の「Googleカレンダー連携」）
 - どこからでも ＋ でクイック追加、検索、完了履歴、取り消し（元に戻す）、JSON の書き出し／読み込み、ダークモード
 
 ## GitHub 同期（AIコーチ連携）— 最初の1回だけ
@@ -130,46 +132,40 @@
 - 進み具合バーは **作成日 → 目標日** の経過割合です。
 - 毎日の Gemini 分析の要約にも、近いカウントダウン（最大8件）が入ります。
 
-### 📅 Googleカレンダー連携（v1.5.0）— アプリは読むだけ、書くのは毎朝のコーチ
-アプリ自体は Google にログインしません（キーもトークンも持ちません）。毎朝 7:00 ごろ（JST）のコーチが Google カレンダー（オーナーのアカウント）を読み書きし、**非公開のデータリポジトリ**に次の2ファイルを書きます。アプリは GitHub 同期のたびに **GET で読むだけ** で、この2ファイルには一切書き込みません（ファイルがなければ何もしません）。パスは `data/life-plan.json` と同じフォルダです。
+### 📅 Googleカレンダー連携（v1.6.0）— アプリが直接読み書きする
 
-**コーチの毎朝の手順**
-1. `data/life-plan.json` の `data.countdowns` を読む。
-2. `gcal: true` で、`data/calendar-links.json` の `links[<countdown id>]` がまだないもの → Google に **終日予定「⏳ <title>」**（日付 = `date`、説明 = `memo`）を作り、`links[<countdown id>] = { "gcalId": "<作った予定の id>", "syncedAt": "<今の ISO 時刻>" }` を書く。
-3. `links` にあるもので `countdown.updatedAt > links[id].syncedAt` → Google の予定（タイトル「⏳ <title>」・日付・説明）を更新し、`syncedAt` を今に。
-4. `data.gcalDeletes[]`（下記）にある `gcalId` の予定を Google から削除し、`calendar-links.json` の `deleted[<gcalId>] = "<削除した ISO 時刻>"` を書き、`links` から該当の countdown id を外す。アプリは `deleted` に載った依頼を自動で片付けます。
-5. `source: "google"` のカウントダウン（Google の予定から作ったもの）は、Google 側を変更・削除しない（読むだけ）。
-6. 最後に `data/calendar.json` を書き直す（今日から約90日間の予定 ＋ タイトルに「⏳」を含む2年先までの予定）。
+アプリ自身が Google Identity Services でオーナーの Google アカウントの許可をもらい、**Google Calendar API を直接**読み書きします。中継ファイル（`data/calendar.json` / `data/calendar-links.json`）も、毎朝のコーチも使いません。
 
-**`data/calendar.json`（コーチだけが書く）**
-```json
-{
-  "updatedAt": "2026-11-02T07:00:00+09:00",
-  "events": [
-    { "id": "<Google の event id>", "title": "歯医者", "start": "2026-11-02T10:30:00+09:00", "end": "2026-11-02T11:00:00+09:00", "allDay": false, "location": "駅前クリニック" },
-    { "id": "<Google の event id>", "title": "⏳ 役員発表", "start": "2027-03-15", "end": "2027-03-16", "allDay": true }
-  ]
-}
-```
-- `start` / `end` は終日なら `YYYY-MM-DD`（`end` は Google と同じく翌日・含まない）、時刻つきならタイムゾーンつき ISO。`location` は任意。
-- アプリでの表示：ホーム「📅 これからの予定」（今日から7日間・最大6件）、カウントダウン画面の「📅 Googleカレンダーの予定」一覧（各予定に「→ カウントダウンにする」）、「Googleカレンダー最終同期: <updatedAt>」。
-- タイトルに **「⏳」を含む予定** は、自動でカウントダウンとして並びます（Google バッジ・読み取り専用・アプリには保存しない）。ただし、アプリのカウントダウンとつながっている予定（`links` の `gcalId`、またはカウントダウンの `gcalId`）は重ねて出しません。
-- 「→ カウントダウンにする」で、`source: "google"`・`gcalId: "<event id>"` のカウントダウンを作ります（同じ予定から2つは作りません）。
+**最初の1回だけ（端末ごと）**
+1. [Google Cloud Console](https://console.cloud.google.com/apis/credentials) でプロジェクトを作り、**Google Calendar API を有効化**する。
+2. **OAuth クライアントID（ウェブアプリケーション）**を作成し、「承認済みの JavaScript 生成元」にこのアプリのオリジン（例：`https://100nao.github.io`）を登録する。OAuth 同意画面では自分のアカウントをテストユーザーに加える（個人用なら「テスト」状態のままで自分だけ使えます）。
+3. アプリの **設定 → 📅 Googleカレンダー連携** にクライアントIDを貼って保存 →「Googleと連携する」を押して許可する。
 
-**`data/calendar-links.json`（コーチだけが書く）**
-```json
-{
-  "links": { "<countdown id>": { "gcalId": "<Google の event id>", "syncedAt": "2026-11-02T07:00:05+09:00" } },
-  "deleted": { "<Google の event id>": "2026-11-02T07:00:06+09:00" }
-}
-```
-- アプリの表示：`gcal: true` でリンクなし →「📅 明日の朝に同期されます」、リンクあり →「📅 同期済み」、リンクありで `updatedAt > syncedAt` →「📅 同期済み・変更は明日の朝に反映されます」。
+**読み取り（Google → アプリ）**
+- 取得タイミング：連携したとき・アプリを開いたとき・画面に戻ったとき・表示中は30秒ごと。
+- 範囲：メインカレンダー（primary）の、今日から約90日間の予定 ＋ タイトルに「⏳」を含む2年先までの予定。
+- アプリでの表示：ホーム「📅 これからの予定」（今日から7日間・最大6件）、カウントダウン画面の「📅 Googleカレンダーの予定」一覧（各予定に「→ カウントダウンにする」）、「Googleカレンダー最終取得: <取得時刻>」。
+- タイトルに **「⏳」を含む予定** は、自動でカウントダウンとして並びます（Google バッジ・読み取り専用・アプリには保存しない）。ただし、アプリのカウントダウンとつながっている予定（カウントダウンの `gcalId`）は重ねて出しません。
+- 「→ カウントダウンにする」で、`source: "google"`・`gcalId: "<event id>"` のカウントダウンを作ります（同じ予定から2つは作りません）。`source: "google"` のカウントダウンは、ここで変えても Google 側は変わりません。
+
+**書き込み（アプリ → Google、その瞬間に実行）**
+- カウントダウンの「📅 Googleカレンダーにも入れる」がオンで保存すると、その場で **終日予定「⏳ <title>」**（日付 = `date`、説明 = `memo`）を作成し、返ってきた event id を `countdowns[].gcalId` に保存します。
+- 編集して保存すると、その場で Google の予定を更新します（Google側で消えていたら作り直します）。
+- カウントダウンを削除、または「Googleカレンダーにも入れる」をオフにすると、その場で Google の予定を削除します。通信に失敗したときだけ `gcalDeletes[]` に依頼を残し、次回の取得時に自動で再試行します（v1.5.0 で溜まった依頼も、連携すれば自動で処理されます）。
+
+**キーとトークンの扱い**
+- クライアントIDとアクセストークンは **この端末の localStorage（`lifeplan.gcal`）だけ** に保存。GitHub 同期・バックアップ（JSON 書き出し）には含まれません。
+- アクセストークンの有効期限（約1時間）が切れたら、設定で「Googleと連携する」を押し直してください（自動で取り直せる場合は押し直し不要です）。
+- 連携は端末ごとです。使う端末ごとにクライアントIDの保存と許可が必要です（クライアントIDは同じもので大丈夫です）。
+- スコープは `https://www.googleapis.com/auth/calendar.events`（予定の読み書き）のみです。
+- CSP は `accounts.google.com`（連携ライブラリと許可画面）と `www.googleapis.com`（Calendar API）への通信を許可します。Service Worker は外部ドメインをキャッシュしません。
 
 **アプリが書くフィールド（`data/life-plan.json` の `data`）**
 - `countdowns[].gcal`：`true` なら「📅 Googleカレンダーにも入れる」がオン。
-- `countdowns[].updatedAt`：編集すると更新（`syncedAt` と比べて更新の要否を判断）。
-- `gcalDeletes[]`：Google から消してほしい予定。カウントダウンを削除したとき、または「Googleカレンダーにも入れる」をオフにしたときに追加（`source: "google"` のものは追加しない）。「元に戻す」で取り消されます。
-  `{ "id": "gdel:<gcalId>", "gcalId": "…", "countdownId": "…", "title": "…", "date": "YYYY-MM-DD", "reason": "deleted | off", "createdAt": "…", "updatedAt": "…" }`
+- `countdowns[].gcalId`：つながっている Google の event id（直接連携ではアプリ自身が書き込む）。
+- `gcalDeletes[]`：直接削除に失敗したときだけ残る再試行用の依頼。通常は空です。
+
+> v1.5.0 の中継ファイル方式は、クライアントID未設定のときのフォールバックとしてだけ残っています（`data/calendar.json` / `data/calendar-links.json` があれば読みます）。直接連携が有効な場合は使いません。
 
 ## データ形式
 
@@ -196,7 +192,7 @@
     "aiAnalyses": [{ "id": "ana:2026-11-02", "date": "2026-11-02", "summary": "…", "insights": ["…"], "suggestionIds": ["…"], "parsed": true, "model": "gemini-…", "runs": 1, "createdAt": "…", "updatedAt": "…" }],   // v1.4.0〜。1日1件（id は ana:日付）
     "aiSuggestions": [{ "id": "…", "title": "…", "quadrant": "q1 | q2 | q3 | q4", "why": "…", "steps": ["…"], "source": "gemini | coach", "ref": "<分析 or コーチメッセージの id>", "date": "2026-11-02", "status": "open | moved | dismissed", "itemId": "<移したタスクの id>", "auto": false, "createdAt": "…", "updatedAt": "…" }],   // v1.4.0〜。自分のタスクとは別
     "countdowns": [{ "id": "…", "title": "役員発表", "emoji": "🎤", "date": "2027-03-15", "memo": "", "taskId": "<item id or ''>", "gcal": false, "gcalId": "<Google の event id or ''>", "source": "'' | google | apple", "createdAt": "…", "updatedAt": "…" }],   // v1.5.0〜。date は目標日（ローカル日付）。source：'' アプリで作成 / google Googleの予定から（apple は将来用・未使用）
-    "gcalDeletes": [{ "id": "gdel:<gcalId>", "gcalId": "…", "countdownId": "…", "title": "…", "date": "…", "reason": "deleted | off", "createdAt": "…", "updatedAt": "…" }],   // v1.5.0〜。コーチへの「Google の予定を消して」依頼
+    "gcalDeletes": [{ "id": "gdel:<gcalId>", "gcalId": "…", "countdownId": "…", "title": "…", "date": "…", "reason": "deleted | off", "createdAt": "…", "updatedAt": "…" }],   // v1.5.0〜。v1.6.0 では直接削除に失敗したときだけ残る再試行用の依頼
     "focus": { "2026": "健康の土台をつくる" },
     "deleted": { "<id>": "<削除日時>", "photo:<photo id>": "<削除日時>" }
   }

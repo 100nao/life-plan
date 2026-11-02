@@ -140,6 +140,59 @@ class FakeGemini:
 
 gem = FakeGemini()
 
+# ── 偽の Google Calendar API（www.googleapis.com）──
+class FakeGCal:
+    def __init__(self):
+        self.events = {}  # id -> event
+        self.calls = []
+        self.n = 0
+    def handle(self, route, request):
+        cors = {'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS', 'Content-Type': 'application/json'}
+        if request.method == 'OPTIONS':
+            return route.fulfill(status=204, headers=cors)
+        if request.headers.get('authorization') != 'Bearer TEST_TOKEN':
+            return route.fulfill(status=401, headers=cors, body=json.dumps({'error': {'message': 'unauthenticated'}}))
+        self.calls.append(request.method + ' ' + request.url)
+        import urllib.parse as up
+        u = up.urlparse(request.url)
+        m = re.match(r'/calendar/v3/calendars/primary/events(?:/([^/]+))?$', u.path)
+        if not m:
+            return route.fulfill(status=404, headers=cors, body='{}')
+        eid = up.unquote(m.group(1)) if m.group(1) else None
+        if request.method == 'GET' and not eid:
+            q = up.parse_qs(u.query)
+            tmin = (q.get('timeMin') or [''])[0][:10]
+            tmax = (q.get('timeMax') or ['9999'])[0][:10]
+            query = (q.get('q') or [''])[0]
+            items = []
+            for e in self.events.values():
+                d = (e.get('start') or {}).get('date') or (e.get('start') or {}).get('dateTime', '')[:10]
+                if tmin and d < tmin: continue
+                if tmax and d > tmax: continue
+                if query and query not in (e.get('summary') or ''): continue
+                items.append(e)
+            items.sort(key=lambda e: (e.get('start') or {}).get('date') or (e.get('start') or {}).get('dateTime', ''))
+            return route.fulfill(status=200, headers=cors, body=json.dumps({'items': items}, ensure_ascii=False))
+        if request.method == 'POST':
+            body = json.loads(request.post_data or '{}')
+            self.n += 1
+            body['id'] = f'gev_{self.n}'
+            self.events[body['id']] = body
+            return route.fulfill(status=200, headers=cors, body=json.dumps(body, ensure_ascii=False))
+        if eid and eid not in self.events:
+            return route.fulfill(status=404, headers=cors, body=json.dumps({'error': {'message': 'Not Found'}}))
+        if request.method == 'PATCH':
+            body = json.loads(request.post_data or '{}')
+            self.events[eid].update(body)
+            return route.fulfill(status=200, headers=cors, body=json.dumps(self.events[eid], ensure_ascii=False))
+        if request.method == 'DELETE':
+            del self.events[eid]
+            return route.fulfill(status=204, headers=cors, body='')
+        return route.fulfill(status=405, headers=cors, body='{}')
+
+gcal_fake = FakeGCal()
+
+
 def wait_idle(pg, ms=400):
     pg.wait_for_timeout(ms)
 
@@ -157,6 +210,8 @@ with sync_playwright() as p:
                               has_touch=True, is_mobile=True, service_workers='block')
     ctx.route('https://api.github.com/**', gh.handle)
     ctx.route('https://generativelanguage.googleapis.com/**', gem.handle)
+    ctx.route('https://www.googleapis.com/**', gcal_fake.handle)
+    ctx.route('https://accounts.google.com/**', lambda route, request: route.abort())  # GIS はテストでは読み込まない（トークン直持ちで代替）
     errors = []
     pg = ctx.new_page()
     pg.on('pageerror', lambda e: errors.append(str(e)))
@@ -696,7 +751,7 @@ with sync_playwright() as p:
     def dd(n): return (TD - datetime.timedelta(days=n)).isoformat()
     def pomu(done, start, today=None):
         return pg.evaluate("([d, s, t]) => LifePlan.pomu({id: 'x', name: 't', startDate: s, done: d}, t)", [done, start, today or TD.isoformat()])
-    check('バージョン 1.5.0', S(pg, 'LifePlan.version') == '1.5.0')
+    check('バージョン 1.6.0', S(pg, 'LifePlan.version') == '1.6.0')
     check('習慣：state.habits が配列', S(pg, 'Array.isArray(LifePlan.state.habits)'))
     # ぽむのルール
     r = pomu([], dd(0)); check('ぽむ：0日はたまご（stage-1）', r['key'] == 'stage-1' and r['lv'] == 1, r)
@@ -983,7 +1038,7 @@ with sync_playwright() as p:
     db = pg.locator('#drawer').bounding_box()
     check('スワイプ：右から左へなぞるとメニューが開く', is_open() and pg.is_visible('#drawerBackdrop'))
     check('スワイプ：メニューは右側から出る', db and abs(db['x'] + db['width'] - 390) <= 2 and db['x'] > 30, db)
-    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.5.0' in pg.inner_text('#drawer [data-action=forceUpdate]'))
+    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.6.0' in pg.inner_text('#drawer [data-action=forceUpdate]'))
     shot(pg, 'v131_menu.png')
     swipe(90, 500, 330, 505)
     check('スワイプ：左から右へで閉じる', not is_open())
@@ -1369,13 +1424,13 @@ with sync_playwright() as p:
     # ── v1.5.0：Googleカレンダー（コーチが書いたファイルを読むだけ）──
     npc = S(pg, 'LifePlan.state.countdowns.length')
     pg.evaluate("location.hash = '#countdown'"); wait_idle(pg, 300)
-    check('カレンダー：未着の案内', 'Googleカレンダーはまだ届いていません' in pg.inner_text('#main'))
+    check('カレンダー：未着の案内', 'Googleカレンダーはまだ連携していません' in pg.inner_text('#main'))
     # アプリで作る → 「Googleカレンダーにも入れる」
     pg.click('#main [data-action=cdNew] >> nth=0'); wait_idle(pg, 300)
     pg.fill('form[data-form=countdown] input[name=title]', '役員発表'); pg.fill('form[data-form=countdown] input[name=date]', '2027-03-15')
     pg.check('form[data-form=countdown] input[name=gcal]'); pg.click('form[data-form=countdown] button[type=submit]'); wait_idle(pg, 400)
     yid = S(pg, "LifePlan.state.countdowns.find(c => c.title === '役員発表').id")
-    check('Googleへ：gcal:true で保存・「明日の朝に同期されます」', S(pg, f"LifePlan.state.countdowns.find(c => c.id === '{yid}').gcal") is True and '明日の朝に同期されます' in pg.inner_text(f'.cd-card[data-cd="{yid}"]'))
+    check('Googleへ：gcal:true で保存・未連携の表示', S(pg, f"LifePlan.state.countdowns.find(c => c.id === '{yid}').gcal") is True and 'Googleカレンダー未連携' in pg.inner_text(f'.cd-card[data-cd="{yid}"]'))
     pg.click('#main [data-action=cdNew] >> nth=0'); wait_idle(pg, 300)
     pg.fill('form[data-form=countdown] input[name=title]', '引っ越し'); pg.fill('form[data-form=countdown] input[name=date]', tdp(60)); pg.check('form[data-form=countdown] input[name=gcal]'); pg.click('form[data-form=countdown] button[type=submit]'); wait_idle(pg, 400)
     mid = S(pg, "LifePlan.state.countdowns.find(c => c.title === '引っ越し').id")
@@ -1396,12 +1451,12 @@ with sync_playwright() as p:
     nputs = len(gh.puts)
     pg.evaluate('LifePlan.syncNow()'); wait_js(pg, "!!(LifePlan.calendar.calendar && LifePlan.calendar.links)", 8000); wait_idle(pg, 400)
     check('カレンダー：読み込み（GET のみ・アプリは書かない）', not any('calendar' in p_ for p_, _ in gh.puts) and not any(c.startswith(('PUT', 'DELETE')) and 'calendar' in c for c in gh.calls))
-    check('カレンダー：最終同期の表示', 'Googleカレンダー最終同期: ' + f'{TD.month}/{TD.day} 7:00' in pg.inner_text('#main'), pg.inner_text('.cal-sync'))
+    check('カレンダー：最終取得の表示', 'Googleカレンダー最終取得: ' + f'{TD.month}/{TD.day} 7:00' in pg.inner_text('#main'), pg.inner_text('.cal-sync'))
     check('⏳ つきの予定は自動でカウントダウン（Google バッジ・読み取り専用）', pg.locator('.cd-card[data-cd="gcal:ev_hg"]').count() == 1 and 'Google' in pg.inner_text('.cd-card[data-cd="gcal:ev_hg"] .g-badge')
           and 'マラソン大会' in pg.inner_text('.cd-card[data-cd="gcal:ev_hg"]') and '⏳ マラソン' not in pg.inner_text('.cd-card[data-cd="gcal:ev_hg"] .cd-title') and pg.locator('.cd-card[data-cd="gcal:ev_hg"] [data-action=cdEdit]').count() == 0
           and S(pg, 'LifePlan.state.countdowns.length') == npc + 2)
     check('アプリから送った予定（⏳ 役員発表）は重ねて出さない', pg.locator('.cd-card[data-cd="gcal:ev_mine"]').count() == 0 and '同期済み' in pg.inner_text(f'.cd-card[data-cd="{yid}"]'))
-    check('まだリンクがないものは「明日の朝に同期されます」', '明日の朝に同期されます' in pg.inner_text(f'.cd-card[data-cd="{mid}"]'))
+    check('まだリンクがないものは未連携の表示', 'Googleカレンダー未連携' in pg.inner_text(f'.cd-card[data-cd="{mid}"]'))
     pg.click('.cal-events summary'); wait_idle(pg, 200)
     check('Google の予定一覧（⏳ なし）', pg.locator('.cal-ev').count() == 4 and pg.locator('.cal-ev[data-gev=ev_far] [data-action=cdFromEvent]').count() == 1)
     pg.click('.cal-ev[data-gev=ev_far] [data-action=cdFromEvent]'); wait_idle(pg, 400)
@@ -1413,7 +1468,7 @@ with sync_playwright() as p:
     # 変更：updatedAt > syncedAt なら「変更は明日の朝に反映」
     pg.click(f'.cd-card[data-cd="{yid}"] [data-action=cdEdit]'); wait_idle(pg, 300)
     pg.fill('form[data-form=countdown] textarea[name=memo]', '会場：本社'); pg.click('form[data-form=countdown] button[type=submit]'); wait_idle(pg, 400)
-    check('変更：同期済みでも「変更は明日の朝に反映されます」', '変更は明日の朝に反映されます' in pg.inner_text(f'.cd-card[data-cd="{yid}"]'))
+    check('変更：リンク済みは「同期済み」のまま', 'Googleカレンダーと同期済み' in pg.inner_text(f'.cd-card[data-cd="{yid}"]'))
     # 削除：Google の予定の削除依頼（gcalDeletes）
     pg.click(f'.cd-card[data-cd="{yid}"] [data-action=cdDelete]'); wait_idle(pg, 400)
     gd = S(pg, 'LifePlan.state.gcalDeletes')
@@ -1428,13 +1483,13 @@ with sync_playwright() as p:
     links['links'][mid] = {'gcalId': 'ev_move', 'syncedAt': datetime.datetime.now(datetime.UTC).replace(tzinfo=None).isoformat() + 'Z'}
     gh.set('data/calendar-links.json', json.dumps(links, ensure_ascii=False))
     pg.evaluate('LifePlan.syncNow()'); pg.wait_for_timeout(1500)
-    check('リンクが届くと「同期済み」', '📅 同期済み' in pg.inner_text(f'.cd-card[data-cd="{mid}"]') and '変更は' not in pg.inner_text(f'.cd-card[data-cd="{mid}"]'))
+    check('リンクが届くと「同期済み」', 'Googleカレンダーと同期済み' in pg.inner_text(f'.cd-card[data-cd="{mid}"]'))
     pg.click(f'.cd-card[data-cd="{mid}"] [data-action=cdEdit]'); wait_idle(pg, 300)
     pg.uncheck('form[data-form=countdown] input[name=gcal]'); pg.click('form[data-form=countdown] button[type=submit]'); wait_idle(pg, 400)
     check('オフにすると削除依頼（reason: off）', any(g['gcalId'] == 'ev_move' and g['reason'] == 'off' for g in S(pg, 'LifePlan.state.gcalDeletes')))
     pg.wait_for_timeout(3500); pg.evaluate('LifePlan.syncNow()'); pg.wait_for_timeout(1500)
     rem = gh.get_json('data/life-plan.json')['data']
-    check('同期：gcalDeletes を保存（コーチが読む）', {g['gcalId'] for g in rem.get('gcalDeletes', [])} == {'ev_mine', 'ev_move'})
+    check('同期：gcalDeletes を保存（再試行用）', {g['gcalId'] for g in rem.get('gcalDeletes', [])} == {'ev_mine', 'ev_move'})
     # コーチが Google から消した → deleted に書く → アプリは依頼を片付ける
     links['deleted'] = {'ev_mine': datetime.datetime.now(datetime.UTC).replace(tzinfo=None).isoformat() + 'Z', 'ev_move': datetime.datetime.now(datetime.UTC).replace(tzinfo=None).isoformat() + 'Z'}
     del links['links'][yid]; del links['links'][mid]
@@ -1448,6 +1503,35 @@ with sync_playwright() as p:
     check('ホーム：これからの予定（7日以内のみ）', pg.locator('.sched-home .sched-row').count() == 3 and '歯医者' in sh and '10:30' in sh and '明日' in sh and '1on1' in sh and '母の誕生日' in sh and '終日' in sh and '株主総会' not in sh and 'マラソン' not in sh)
     check('ホーム：⏳ の予定はカウントダウンに', 'マラソン大会' in pg.inner_text('.cd-home'))
     pg.evaluate("location.hash = '#home'"); wait_idle(pg, 200)
+    # ── v1.6.0：Googleカレンダー直接連携（トークンを端末に持つ状態を再現）──
+    gcal_fake.events['gev_seed'] = {'id': 'gev_seed', 'summary': '⏳ 直接連携の大会', 'start': {'date': tdp(40)}, 'end': {'date': tdp(41)}, 'location': '競技場'}
+    gcal_fake.events['gev_meet'] = {'id': 'gev_meet', 'summary': '直接連携の面談', 'start': {'dateTime': f'{tdp(2)}T13:00:00+09:00'}, 'end': {'dateTime': f'{tdp(2)}T13:30:00+09:00'}}
+    pg.evaluate("""() => { localStorage.setItem('lifeplan.gcal', JSON.stringify({clientId: 'test-client.apps.googleusercontent.com', token: 'TEST_TOKEN', expiresAt: Date.now() + 3600000})); }""")
+    pg.reload(); wait_idle(pg, 600)
+    check('直接連携：LifePlan.gcal が連携済み', S(pg, 'LifePlan.gcal.hasClient') is True and S(pg, 'LifePlan.gcal.connected') is True, S(pg, 'LifePlan.gcal'))
+    pg.evaluate('LifePlan.pullCalendar()'); wait_js(pg, "LifePlan.calendar.calendar && LifePlan.calendar.calendar.events.some(e => e.id === 'gev_seed')", 8000); wait_idle(pg, 300)
+    pg.evaluate("location.hash = '#countdown'"); wait_idle(pg, 300)
+    check('直接連携：Googleの⏳予定がその場でカウントダウンに', pg.locator('.cd-card[data-cd="gcal:gev_seed"]').count() == 1 and '直接連携の大会' in pg.inner_text('.cd-card[data-cd="gcal:gev_seed"]'))
+    check('直接連携：通常の予定も一覧に出る', pg.locator('.cal-ev[data-gev=gev_meet]').count() == 1)
+    # カウントダウンを作ると、その場で Google に POST される
+    pg.click('#main [data-action=cdNew] >> nth=0'); wait_idle(pg, 300)
+    pg.fill('form[data-form=countdown] input[name=title]', '直接テスト'); pg.fill('form[data-form=countdown] input[name=date]', tdp(50))
+    pg.check('form[data-form=countdown] input[name=gcal]'); pg.click('form[data-form=countdown] button[type=submit]')
+    wait_js(pg, "LifePlan.state.countdowns.find(c => c.title === '直接テスト') && !!LifePlan.state.countdowns.find(c => c.title === '直接テスト').gcalId", 8000)
+    dc = S(pg, "LifePlan.state.countdowns.find(c => c.title === '直接テスト')"); wait_idle(pg, 500)
+    gev = gcal_fake.events.get(dc['gcalId'])
+    check('直接連携：保存した瞬間に Google へ作成（⏳・終日・メモ）', gev is not None and gev.get('summary') == '⏳ 直接テスト' and gev.get('start', {}).get('date') == tdp(50) and gev.get('end', {}).get('date') == tdp(51), gev)
+    check('直接連携：カードは「同期済み」', 'Googleカレンダーと同期済み' in pg.inner_text('.cd-card[data-cd="' + dc['id'] + '"]'))
+    # 編集すると PATCH、削除すると DELETE がその場で飛ぶ
+    pg.click('.cd-card[data-cd="' + dc['id'] + '"] [data-action=cdEdit]'); wait_idle(pg, 300)
+    pg.fill('form[data-form=countdown] input[name=date]', tdp(55)); pg.click('form[data-form=countdown] button[type=submit]'); wait_idle(pg, 800)
+    check('直接連携：編集がその場で Google に反映', gcal_fake.events[dc['gcalId']].get('start', {}).get('date') == tdp(55), gcal_fake.events.get(dc['gcalId']))
+    pg.click('.cd-card[data-cd="' + dc['id'] + '"] [data-action=cdDelete]'); wait_idle(pg, 800)
+    check('直接連携：削除がその場で Google から消える', dc['gcalId'] not in gcal_fake.events and S(pg, 'LifePlan.state.gcalDeletes.length') == 0)
+    check('直接連携：設定カード（連携済み）', pg.evaluate("location.hash = '#settings/gcal'") or True)
+    wait_idle(pg, 400)
+    check('直接連携：設定に連携カードが出る', pg.locator('#gcalCard').count() == 1 and '連携済み' in pg.inner_text('#gcalCard'))
+    pg.evaluate("localStorage.removeItem('lifeplan.gcal')")
     # ── PC ──
     state_dump = pg.evaluate("localStorage.getItem('lifeplan.v1')")
     # ── Service Worker・オフライン（別コンテキスト：同期のモックと分けるため）──
@@ -1473,7 +1557,7 @@ with sync_playwright() as p:
     nav = sp.evaluate("performance.getEntriesByType('navigation')[0].name")
     check('アップデート：?v=<時刻> で読み込み直す', re.search(r'[?&]v=\d{10,}', nav) is not None and sp.evaluate('window.__beforeUpdate') is None, nav)
     check('アップデート：古いキャッシュを削除', 'lifeplan-old-test' not in sp.evaluate('caches.keys()'))
-    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.5.0' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
+    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.6.0' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
     check('アップデート：Service Worker は引き続き有効', sp.evaluate("navigator.serviceWorker.getRegistration().then(r => !!(r && r.active))"))
     swc.set_offline(True)
     sp.reload(); wait_idle(sp, 1200)

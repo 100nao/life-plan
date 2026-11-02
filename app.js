@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.5.0';
+  const APP_VERSION = '1.6.0';
   const DEFAULT_CATEGORIES = ['旅行', '仕事/キャリア', '健康', '家族', '趣味', '学び', 'お金', 'その他'];
   const IMPORTANCE = { high: '高', mid: '中', low: '低' };
   const IMPORTANCE_ORDER = { high: 0, mid: 1, low: 2 };
@@ -934,6 +934,7 @@
     const out = [sectionHead('設定・バックアップ')];
     out.push(syncCard());
     out.push(aiCard().replace('<ul class="small muted note-list">', aiDailySettings() + '<ul class="small muted note-list">'));
+    out.push(gcalCard());
     out.push(`<section class="card">
       <div class="card-head"><h2>ファイルでバックアップ</h2></div>
       <p class="muted small">データはこの端末のブラウザ内（localStorage）に保存されています。${sync.connected ? 'GitHub にも自動で保存されています。' : '機種変更やブラウザのデータ削除に備えて、ときどき書き出してください。'}</p>
@@ -975,7 +976,7 @@
       ${!isStandalone() ? '<p class="muted small">iPhone: Safariの共有ボタン →「ホーム画面に追加」でアプリとして使えます（HTTPSで公開されている必要があります）。</p>' : ''}
       <div class="btn-row"><button class="btn ghost danger small" data-action="wipeAll">すべてのデータを削除</button></div>
     </section>`);
-    if (arg === 'sync' || arg === 'ai') setTimeout(() => { const c = $(arg === 'ai' ? '#aiCard' : '#syncCard'); if (c) c.scrollIntoView({ block: 'start' }); }, 0);
+    if (arg === 'sync' || arg === 'ai' || arg === 'gcal') setTimeout(() => { const c = $(arg === 'ai' ? '#aiCard' : arg === 'gcal' ? '#gcalCard' : '#syncCard'); if (c) c.scrollIntoView({ block: 'start' }); }, 0);
     return out.join('');
   }
   const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
@@ -3247,11 +3248,164 @@
   const getCountdown = (id) => state.countdowns.find((c) => c.id === id);
   const cdDays = (c) => daysUntil(c.date);
 
-  // ── Googleカレンダー（読むだけ）：data/calendar.json と data/calendar-links.json は毎朝コーチが書く ──
+  // ── Googleカレンダー直接連携（v1.6.0）：アプリが Google Calendar API を直接読み書きする ──
+  // クライアントID・アクセストークンはこの端末の localStorage（lifeplan.gcal）だけに保存し、
+  // GitHub 同期・バックアップには含めない（Gemini の APIキーと同じ扱い）。
+  // v1.5.0 の中継ファイル（data/calendar.json / calendar-links.json）読みは、未連携時のフォールバックとして残す。
   const CAL_KEY = 'lifeplan.calendar';
   const calUi = { error: '', open: false };
   let cal = (() => { try { const o = JSON.parse(localStorage.getItem(CAL_KEY) || '{}'); return { calendar: o.calendar || null, links: o.links || null, fetchedAt: o.fetchedAt || '' }; } catch (e) { return { calendar: null, links: null, fetchedAt: '' }; } })();
   const saveCal = () => { try { localStorage.setItem(CAL_KEY, JSON.stringify(cal)); } catch (e) { /* noop */ } };
+  const GCAL_KEY = 'lifeplan.gcal';
+  const GCAL_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+  const GCAL_API = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
+  let gcal = (() => { try { const o = JSON.parse(localStorage.getItem(GCAL_KEY) || '{}'); return { clientId: String(o.clientId || ''), token: String(o.token || ''), expiresAt: Number(o.expiresAt || 0) }; } catch (e) { return { clientId: '', token: '', expiresAt: 0 }; } })();
+  const saveGcal = () => { try { localStorage.setItem(GCAL_KEY, JSON.stringify(gcal)); } catch (e) { /* noop */ } };
+  const gcalHasClient = () => !!gcal.clientId;
+  const gcalTokenValid = () => !!gcal.token && Date.now() < gcal.expiresAt - 60000;
+  const gcalConnected = () => gcalTokenValid();
+  let gcalTokenClient = null; let gcalTokenClientFor = ''; let gcalTokenWaiters = [];
+  function gcalFlushWaiters(token) { const w = gcalTokenWaiters; gcalTokenWaiters = []; w.forEach((fn) => fn(token || null)); }
+  function loadGis() {
+    return new Promise((resolve) => {
+      const ok = () => !!(window.google && google.accounts && google.accounts.oauth2);
+      if (ok()) return resolve(true);
+      const started = Date.now();
+      const t = setInterval(() => { if (ok()) { clearInterval(t); resolve(true); } else if (Date.now() - started > 8000) { clearInterval(t); resolve(false); } }, 100);
+    });
+  }
+  async function gcalEnsureToken(interactive) {
+    if (gcalTokenValid()) return gcal.token;
+    if (!gcal.clientId) return null;
+    if (!(await loadGis())) { if (interactive) throw new Error('Googleの連携ライブラリを読み込めませんでした（通信状態を確認してください）'); return null; }
+    return new Promise((resolve) => {
+      gcalTokenWaiters.push(resolve);
+      if (gcalTokenWaiters.length > 1) return; // 取得中なら相乗りする
+      try {
+        if (!gcalTokenClient || gcalTokenClientFor !== gcal.clientId) {
+          gcalTokenClientFor = gcal.clientId;
+          gcalTokenClient = google.accounts.oauth2.initTokenClient({
+            client_id: gcal.clientId, scope: GCAL_SCOPE,
+            callback: (resp) => { if (resp && resp.access_token) { gcal.token = resp.access_token; gcal.expiresAt = Date.now() + (Number(resp.expires_in) || 3600) * 1000; saveGcal(); gcalFlushWaiters(gcal.token); } else gcalFlushWaiters(null); },
+            error_callback: () => gcalFlushWaiters(null),
+          });
+        }
+        gcalTokenClient.requestAccessToken({ prompt: interactive ? 'consent' : '' });
+      } catch (e) { gcalFlushWaiters(null); }
+    });
+  }
+  async function gcalApi(url, opts = {}) {
+    const token = await gcalEnsureToken(false);
+    if (!token) throw new Error('Googleカレンダーと連携していません（設定 → Googleカレンダー連携）');
+    let res;
+    try { res = await fetch(url, { ...opts, cache: 'no-store', headers: { Authorization: 'Bearer ' + token, ...(opts.body ? { 'Content-Type': 'application/json' } : {}) } }); }
+    catch (e) { const err = new Error('Googleカレンダーに接続できません（ネットワークを確認）'); err.network = true; throw err; }
+    if (res.status === 401) { gcal.token = ''; gcal.expiresAt = 0; saveGcal(); throw new Error('Google連携の有効期限が切れました。設定で「Googleと連携する」を押し直してください'); }
+    if (!res.ok && res.status !== 404) { let m = ''; try { m = ((await res.json()).error || {}).message || ''; } catch (e) { /* noop */ } throw new Error(`Googleカレンダーエラー（${res.status}）${m}`); }
+    return res;
+  }
+  const gcalEventToLocal = (e) => {
+    if (!e || !e.id || e.status === 'cancelled') return null;
+    const allDay = !!(e.start && e.start.date);
+    const start = allDay ? e.start.date : (e.start && e.start.dateTime) || '';
+    const end = allDay ? (e.end && e.end.date) || '' : (e.end && e.end.dateTime) || '';
+    if (!start) return null;
+    return { id: String(e.id), title: String(e.summary || '（無題の予定）'), start: String(start), end: String(end), allDay, location: String(e.location || '') };
+  };
+  async function gcalListEvents(timeMin, timeMax, q) {
+    const out = []; let pageToken = '';
+    for (let page = 0; page < 5; page++) {
+      const u = new URL(GCAL_API);
+      u.searchParams.set('timeMin', timeMin); u.searchParams.set('timeMax', timeMax);
+      u.searchParams.set('singleEvents', 'true'); u.searchParams.set('orderBy', 'startTime'); u.searchParams.set('maxResults', '250');
+      if (q) u.searchParams.set('q', q);
+      if (pageToken) u.searchParams.set('pageToken', pageToken);
+      const res = await gcalApi(u.toString());
+      if (res.status === 404) break;
+      const j = await res.json();
+      (j.items || []).forEach((e) => { const l = gcalEventToLocal(e); if (l) out.push(l); });
+      pageToken = j.nextPageToken || '';
+      if (!pageToken) break;
+    }
+    return out;
+  }
+  async function gcalDeleteEvent(gid) {
+    if (!gid) return null;
+    return gcalApi(GCAL_API + '/' + encodeURIComponent(gid), { method: 'DELETE' }); // 404（すでに無い）は成功扱い
+  }
+  let calPullTimer = null;
+  function pullCalendarSoon() { clearTimeout(calPullTimer); calPullTimer = setTimeout(() => { pullCalendar().catch(() => {}); }, 600); }
+  async function gcalUpsertCountdown(c) {
+    if (!c || !c.gcal || c.source === 'google') return false;
+    const body = { summary: '⏳ ' + c.title, description: c.memo || '', start: { date: c.date }, end: { date: addDays(c.date, 1) } };
+    const existing = cdGcalId(c); // v1.5.0 のリンク経由でつながっているものも拾う
+    let res;
+    if (existing) {
+      res = await gcalApi(GCAL_API + '/' + encodeURIComponent(existing), { method: 'PATCH', body: JSON.stringify(body) });
+      if (res.status === 404) res = await gcalApi(GCAL_API, { method: 'POST', body: JSON.stringify(body) }); // Google側で消えていたら作り直す
+    } else {
+      res = await gcalApi(GCAL_API, { method: 'POST', body: JSON.stringify(body) });
+    }
+    const j = await res.json();
+    if (j && j.id && c.gcalId !== String(j.id)) { c.gcalId = String(j.id); save(); rerenderSoft(); }
+    pullCalendarSoon();
+    return true;
+  }
+  // v1.5.0 で「コーチに消してもらう」として溜まった削除依頼を、直接連携で自分で処理する
+  async function flushGcalDeletes() {
+    if (!state.gcalDeletes.length) return;
+    const doneIds = [];
+    for (const g of [...state.gcalDeletes]) { try { await gcalDeleteEvent(g.gcalId); doneIds.push(g.id); } catch (e) { /* 次回に再試行 */ } }
+    if (doneIds.length) { state.gcalDeletes = state.gcalDeletes.filter((g) => !doneIds.includes(g.id)); doneIds.forEach((id) => markDeleted(id)); save(); }
+  }
+  async function pullCalendarDirect() {
+    const t0 = new Date(); t0.setHours(0, 0, 0, 0);
+    const t90 = new Date(t0.getTime() + 90 * 86400000);
+    const t2y = new Date(t0.getTime() + 731 * 86400000);
+    const [near, hg] = await Promise.all([
+      gcalListEvents(t0.toISOString(), t90.toISOString(), ''),
+      gcalListEvents(t0.toISOString(), t2y.toISOString(), '⏳'),
+    ]);
+    const byId = new Map();
+    [...near, ...hg].forEach((e) => byId.set(e.id, e));
+    const events = [...byId.values()].sort((a, b) => String(a.start).localeCompare(String(b.start)));
+    const before = JSON.stringify(cal.calendar);
+    cal = { calendar: { updatedAt: nowIso(), events }, links: cal.links, fetchedAt: nowIso() };
+    calUi.error = ''; saveCal();
+    await flushGcalDeletes();
+    if (before !== JSON.stringify(cal.calendar)) rerenderSoft();
+    return true;
+  }
+  function gcalCard() {
+    const chip = gcalConnected() ? '<span class="chip sync-ok">連携済み</span>' : gcalHasClient() ? '<span class="chip">クライアントID設定済み・未接続</span>' : '<span class="chip">未設定</span>';
+    return `<section class="card" id="gcalCard">
+      <div class="card-head"><h2>📅 Googleカレンダー連携</h2>${chip}</div>
+      <p class="small">アプリが Googleカレンダーを<b>直接</b>読み書きします（中継ファイルやAIコーチは使いません）。Googleカレンダーで予定を追加・変更すると、アプリに戻ったその場で反映され、表示中は30秒ごとに自動で取り直します。カウントダウンで「Googleカレンダーにも入れる」をオンにすると、保存した瞬間に終日予定「⏳ 予定名」が作られます。</p>
+      <form data-form="gcalSetup" class="ai-form">
+        <label class="field"><span class="field-label">OAuth クライアントID（ウェブアプリケーション）</span>
+          <input name="clientId" type="text" placeholder="xxxxx.apps.googleusercontent.com" value="${esc(gcal.clientId)}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+        <div class="btn-row"><button class="btn primary small" type="submit">クライアントIDを保存</button>${gcalHasClient() ? '<button type="button" class="btn soft small" data-action="gcalConnect">Googleと連携する</button><button type="button" class="btn soft small" data-action="gcalRefresh">今すぐ取得</button><button type="button" class="btn ghost danger small" data-action="gcalDisconnect">連携を解除</button>' : ''}</div>
+        <p class="sync-msg small" id="gcalMsg"></p>
+      </form>
+      <ul class="small muted note-list">
+        <li>クライアントIDの作り方：<a class="link" href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer">Google Cloud Console ↗</a> で Google Calendar API を有効化し、「OAuth クライアントID（ウェブアプリケーション）」を作成。承認済みの JavaScript 生成元に <b>${esc(location.origin)}</b> を登録してください。</li>
+        <li>クライアントIDとアクセストークンはこの端末だけに保存され、GitHub 同期・バックアップには含まれません。トークンの有効期限が切れたら「Googleと連携する」を押し直してください。</li>
+        <li>連携は端末ごとです。使う端末ごとに、クライアントIDの保存と連携が必要です（同じクライアントIDで大丈夫です）。</li>
+      </ul>
+    </section>`;
+  }
+  async function gcalConnectInteractive() {
+    const msg = $('#gcalMsg');
+    if (!gcalHasClient()) { if (msg) msg.textContent = '先にクライアントIDを保存してください'; toast('先にクライアントIDを保存してください'); return; }
+    try {
+      if (msg) msg.textContent = 'Googleの画面で許可してください…';
+      const token = await gcalEnsureToken(true);
+      if (!token) throw new Error('連携できませんでした（ポップアップがブロックされた場合は許可してください）');
+      await pullCalendar();
+      toast('Googleカレンダーと連携しました ✓');
+      rerender();
+    } catch (e) { if (msg) msg.textContent = '⚠️ ' + (e.message || e); toast('⚠️ ' + (e.message || e)); }
+  }
   const dataDir = () => (sync.path || 'data/life-plan.json').replace(/[^/]*$/, '');
   const calPath = () => dataDir() + 'calendar.json';
   const calLinksPath = () => dataDir() + 'calendar-links.json';
@@ -3272,12 +3426,20 @@
   function cdGcalStatus(c) {
     if (c.source === 'google' && c.gcalId) return { cls: 'g-linked', text: 'Googleカレンダーの予定から' };
     if (!c.gcal) return null;
-    const l = calLinks()[c.id];
-    if (!l || !l.gcalId) return { cls: 'g-pending', text: '📅 明日の朝に同期されます' };
-    if (l.syncedAt && c.updatedAt > l.syncedAt) return { cls: 'g-pending', text: '📅 同期済み・変更は明日の朝に反映されます' };
-    return { cls: 'g-ok', text: '📅 同期済み' };
+    if (cdGcalId(c)) return { cls: 'g-ok', text: '📅 Googleカレンダーと同期済み' };
+    if (!gcalHasClient()) return { cls: 'g-pending', text: '📅 Googleカレンダー未連携（設定で連携すると即時同期します）' };
+    if (!gcalConnected()) return { cls: 'g-pending', text: '📅 Google連携の有効期限切れ（設定で連携し直してください）' };
+    return { cls: 'g-pending', text: '📅 Googleカレンダーへ送信待ち' };
   }
   async function pullCalendar() {
+    // 直接連携できる場合は Google から直接読む。できない場合だけ v1.5.0 の中継ファイルにフォールバック
+    if (gcalHasClient()) {
+      const token = await gcalEnsureToken(false);
+      if (token) return pullCalendarDirect();
+    }
+    return pullCalendarLegacy();
+  }
+  async function pullCalendarLegacy() {
     const [f1, f2] = await Promise.all([ghGetFile(calPath()), ghGetFile(calLinksPath())]);
     const parse = (f) => { if (!f.exists || !f.text.trim()) return null; try { return JSON.parse(f.text); } catch (e) { return extractJson(f.text); } };
     const c1 = parse(f1); const c2 = parse(f2);
@@ -3350,8 +3512,8 @@
   }
   const fmtStamp = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${pad(d.getMinutes())}`; };
   function calSyncLine() {
-    if (cal.calendar && cal.calendar.updatedAt) return `<p class="cal-sync muted small">📅 Googleカレンダー最終同期: ${esc(fmtStamp(cal.calendar.updatedAt))}${calUi.error ? `<span class="error-text">（読み込みエラー：${esc(calUi.error)}）</span>` : ''}</p>`;
-    return `<p class="cal-sync muted small">📅 Googleカレンダーはまだ届いていません${sync.connected ? '（毎朝7時ごろコーチが更新します）' : '（GitHub 同期をつなぐと届きます）'}</p>`;
+    if (cal.calendar && cal.calendar.updatedAt) return `<p class="cal-sync muted small">📅 Googleカレンダー最終取得: ${esc(fmtStamp(cal.calendar.updatedAt))}${calUi.error ? `<span class="error-text">（読み込みエラー：${esc(calUi.error)}）</span>` : ''}</p>`;
+    return `<p class="cal-sync muted small">📅 Googleカレンダーはまだ連携していません（設定 → Googleカレンダー連携で接続すると、その場で反映されます）</p>`;
   }
   function viewCountdown() {
     const { up, past } = sortedCountdowns();
@@ -3381,7 +3543,7 @@
     const rows = evs.slice(0, 6).map((e) => { const n = daysUntil(e.date); return `<li class="sched-row"><span class="sched-d ${n === 0 ? 'today' : ''}">${n === 0 ? '今日' : n === 1 ? '明日' : fmtShort(e.date)}<small>${'日月火水木金土'[new Date(e.date + 'T00:00').getDay()]}</small></span><span class="grow"><b>${esc(trunc(stripHourglass(e.title), 26))}</b><span class="muted small">${evTime(e) ? ' ' + evTime(e) : ' 終日'}${e.location ? '・' + esc(trunc(e.location, 14)) : ''}</span></span></li>`; }).join('');
     return `<section class="card sched-home"><div class="card-head"><h2>📅 これからの予定</h2><a class="link small" href="#countdown">カウントダウン</a></div>
       ${rows ? `<ul class="sched-list">${rows}</ul>${evs.length > 6 ? `<p class="muted small">ほか ${evs.length - 6}件</p>` : ''}` : '<p class="muted small">この7日間の予定はありません</p>'}
-      <p class="muted small cal-sync">Googleカレンダー最終同期: ${esc(fmtStamp(cal.calendar.updatedAt || cal.fetchedAt))}</p></section>`;
+      <p class="muted small cal-sync">Googleカレンダー最終取得: ${esc(fmtStamp(cal.calendar.updatedAt || cal.fetchedAt))}</p></section>`;
   }
   function addMonthsStr(base, m) { const [y, mo, d] = base.split('-').map(Number); const dt = new Date(y, mo - 1 + m, 1); const last = new Date(dt.getFullYear(), dt.getMonth() + 1, 0).getDate(); dt.setDate(Math.min(d, last)); return todayStr(dt); }
   function cdPreviewText(v) { return isDateStr(v) ? `${fmtDate(v)} ・ ${cdText(daysUntil(v))}` : '日付を選んでください'; }
@@ -3401,12 +3563,12 @@
           <p class="cd-preview" id="cdPreview">${cdPreviewText(v.date)}</p></div>
         <label class="field"><span class="field-label">メモ（任意）</span><textarea name="memo" rows="2" placeholder="例：資料は2週間前に完成">${esc(v.memo)}</textarea></label>
         <label class="field"><span class="field-label">関連するタスク・目標（任意）</span><select name="taskId"><option value="">（なし）</option>${items.map((i) => `<option value="${i.id}" ${i.id === v.taskId ? 'selected' : ''}>${esc(trunc(i.title, 40))}</option>`).join('')}</select></label>
-        ${fromGoogle ? '<p class="muted small">📅 Googleカレンダーの予定から作ったカウントダウンです（ここで変えても Google の予定は変わりません）</p>' : `<label class="check-line cd-gcal-toggle"><input type="checkbox" name="gcal" ${v.gcal ? 'checked' : ''}> 📅 Googleカレンダーにも入れる<span class="muted small">（毎朝7時ごろコーチが「⏳ 予定名」の終日予定を作ります）</span></label>`}
+        ${fromGoogle ? '<p class="muted small">📅 Googleカレンダーの予定から作ったカウントダウンです（ここで変えても Google の予定は変わりません）</p>' : `<label class="check-line cd-gcal-toggle"><input type="checkbox" name="gcal" ${v.gcal ? 'checked' : ''}> 📅 Googleカレンダーにも入れる<span class="muted small">（保存した瞬間に「⏳ 予定名」の終日予定を作ります）</span></label>`}
         <div class="btn-row between">${c ? `<button type="button" class="btn ghost danger" data-action="cdDelete" data-id="${c.id}">削除</button>` : '<span></span>'}
           <span class="btn-row"><button type="button" class="btn ghost" data-action="closeModal">キャンセル</button><button class="btn primary" type="submit">${c ? '保存' : 'つくる'}</button></span></div>
       </form>`);
   }
-  function submitCountdown(form) {
+  async function submitCountdown(form) {
     const fd = new FormData(form);
     const title = String(fd.get('title') || '').trim(); const date = String(fd.get('date') || '');
     if (!title) return;
@@ -3417,17 +3579,38 @@
     if (!c && date < todayStr()) { toast('今日以降の日付を選んでください'); return; }
     const snap = snapshot();
     if (c) {
-      if (c.gcal && data.gcal === false) queueGcalDelete(c, 'off'); // オフにした → Google の予定を消してもらう
-      if (data.gcal) { const gid = cdGcalId(c); if (gid) { state.gcalDeletes = state.gcalDeletes.filter((g) => { if (g.gcalId !== gid) return true; markDeleted(g.id); return false; }); } }
-      Object.assign(c, normCountdown({ ...c, ...data }), { updatedAt: nowIso() }); save(); closeModal(); rerender(); undoable('保存しました', snap);
-    } else { const nc = normCountdown(data); state.countdowns.push(nc); save(); closeModal(); if (route().name !== 'countdown') go('#countdown'); else rerender(); toast(`${nc.emoji} 「${nc.title}」まで ${cdText(cdDays(nc))}${nc.gcal ? '（Googleカレンダーへは明日の朝）' : ''}`); }
+      const oldGid = c.gcal ? cdGcalId(c) : '';
+      const turnedOff = !!c.gcal && data.gcal === false && !!oldGid && c.source !== 'google';
+      Object.assign(c, normCountdown({ ...c, ...data }), { updatedAt: nowIso() });
+      if (turnedOff) c.gcalId = ''; // Google側はこのあと直接消す（失敗したら削除依頼に残して次回再試行）
+      save(); closeModal(); rerender(); undoable('保存しました', snap);
+      if (turnedOff) {
+        try { await gcalDeleteEvent(oldGid); pullCalendarSoon(); toast('Googleカレンダーの予定も削除しました'); }
+        catch (e) { state.gcalDeletes.push(normGcalDelete({ gcalId: oldGid, countdownId: c.id, title: c.title, date: c.date, reason: 'off' })); save(); toast('⚠️ Google側の削除に失敗しました（次回取得時に再試行します）'); }
+      } else if (data.gcal) {
+        try { await gcalUpsertCountdown(c); toast('Googleカレンダーにも反映しました ✓'); }
+        catch (e) { toast('⚠️ ' + (e.message || e)); }
+      }
+    } else {
+      const nc = normCountdown(data); state.countdowns.push(nc); save(); closeModal(); if (route().name !== 'countdown') go('#countdown'); else rerender();
+      toast(`${nc.emoji} 「${nc.title}」まで ${cdText(cdDays(nc))}${nc.gcal ? '（Googleカレンダーへ送信中…）' : ''}`);
+      if (nc.gcal) {
+        try { await gcalUpsertCountdown(nc); toast('Googleカレンダーにも追加しました ✓'); }
+        catch (e) { toast('⚠️ ' + (e.message || e)); }
+      }
+    }
   }
-  function deleteCountdown(id) {
+  async function deleteCountdown(id) {
     const c = getCountdown(id); if (!c) return;
     const snap = snapshot();
-    if (c.gcal) queueGcalDelete(c, 'deleted');
+    const gid = c.gcal ? cdGcalId(c) : '';
+    const fromGoogle = c.source === 'google';
     state.countdowns = state.countdowns.filter((x) => x.id !== id);
     markDeleted(id); save(); if (!backdrop.hidden) closeModal(); rerender(); undoable(`「${trunc(c.title, 16)}」を削除しました`, snap);
+    if (gid && !fromGoogle) { // Googleから作ったものは Google側を消さない（従来通り）
+      try { await gcalDeleteEvent(gid); pullCalendarSoon(); }
+      catch (e) { state.gcalDeletes.push(normGcalDelete({ gcalId: gid, countdownId: id, title: c.title, date: c.date, reason: 'deleted' })); save(); }
+    }
   }
   function countdownContext() {
     const { up } = sortedCountdowns();
@@ -3445,6 +3628,9 @@
   }
   setInterval(checkDayRollover, 30000);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkDayRollover(); });
+  // Googleカレンダー直接連携：表示中は30秒ごとに取り直し、画面に戻ったときもすぐ取り直す（Google側の追加・変更をその場で反映）
+  setInterval(() => { if (document.visibilityState === 'visible' && gcalConnected()) pullCalendar().catch(() => {}); }, 30000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && gcalConnected()) pullCalendar().catch(() => {}); });
   document.addEventListener('input', (e) => {
     if (e.target.matches && e.target.matches('form[data-form=countdown] input[name=date]')) { const p = $('#cdPreview'); if (p) p.textContent = cdPreviewText(e.target.value); }
   });
@@ -3657,6 +3843,13 @@
       if (!(await confirmDialog('この端末に保存した Gemini APIキーを削除します。', '削除する', true))) return;
       ai.key = ''; saveAi(); aiUi.showKey = false; rerender(); toast('APIキーを削除しました');
     },
+    gcalConnect: () => gcalConnectInteractive(),
+    gcalRefresh: async () => { try { await pullCalendar(); rerender(); toast('Googleカレンダーを取得しました ✓'); } catch (e) { toast('⚠️ ' + (e.message || e)); } },
+    gcalDisconnect: async () => {
+      if (!(await confirmDialog('この端末の Googleカレンダー連携を解除します（クライアントIDとトークンを削除します。Google側の予定は消えません）。', '解除する', true))) return;
+      try { if (gcal.token && window.google && google.accounts && google.accounts.oauth2) google.accounts.oauth2.revoke(gcal.token, () => {}); } catch (e) { /* noop */ }
+      gcal = { clientId: '', token: '', expiresAt: 0 }; gcalTokenClient = null; saveGcal(); rerender(); toast('連携を解除しました');
+    },
     syncDisconnect: async () => {
       if (!(await confirmDialog('この端末の GitHub 接続を解除し、トークンを削除します（GitHub 上のデータとこの端末のデータは残ります）。', '解除する', true))) return;
       sync = { ...SYNC_DEFAULTS, owner: sync.owner, repo: sync.repo, branch: sync.branch, path: sync.path, inboxPath: sync.inboxPath };
@@ -3724,6 +3917,13 @@
       case 'habit': submitHabit(f); break;
       case 'countdown': submitCountdown(f); break;
       case 'syncSetup': testConnection(f); break;
+      case 'gcalSetup': {
+        const cid = String(fd.get('clientId') || '').trim();
+        if (cid !== gcal.clientId) { gcal.clientId = cid; gcal.token = ''; gcal.expiresAt = 0; gcalTokenClient = null; }
+        saveGcal(); rerender();
+        toast(cid ? 'クライアントIDを保存しました。続けて「Googleと連携する」を押してください' : 'クライアントIDを消しました');
+        break;
+      }
       case 'photoJournal': submitPhotoJournal(f); break;
       case 'obsidianPaste': submitObsidianPaste(f); break;
       case 'aiChat': { const t = String(fd.get('text') || ''); if (t.trim()) aiSend(t); break; }
@@ -3841,5 +4041,5 @@
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') setTimeout(() => maybeDailyAnalysis(), 800); });
 
   // テスト・デバッグ用（読み取りのみ）
-  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, pomu: (h, today) => { const i = pomuInfo(normHabit(h), today); return { key: i.key, name: i.name, route: i.route, lv: i.lv, total: i.total, M: i.M, streak: i.streak, best: i.best, hints: i.hints }; }, pomuChangeMsg, syncNow: () => syncNow(), topPomu: () => { const p = topPomu(); return { key: p.key, lv: p.lv, id: p.h ? p.h.id : '' }; }, photoIds: async () => (await photoAll()).map((r) => r.id).sort(), photoInfo: async (id) => { const r = await photoGet(id); return r ? { id: r.id, bytes: r.full.byteLength, synced: !!r.synced } : null; }, syncPhotos: () => syncPhotos(), photoGc: () => photoGc(), aiDaily: () => ({ ...aiDaily, manualLeft: manualLeft(), busy: anaUi.busy, error: anaUi.error, daily: aiDailyOn(), autoMove: aiAutoMoveOn() }), analysisContext: () => analysisContext(), checkDayRollover: () => checkDayRollover(), get calendar() { return cal; }, pullCalendar: () => pullCalendar(), parseAnalysis, maybeDailyAnalysis: () => maybeDailyAnalysis(), runAnalysis: () => runAnalysis(true), photoDims: async (id) => { const r = await photoGet(id); if (!r) return null; const b = await createImageBitmap(new Blob([r.full], { type: 'image/jpeg' })); return [b.width, b.height, r.full.byteLength]; } };
+  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, pomu: (h, today) => { const i = pomuInfo(normHabit(h), today); return { key: i.key, name: i.name, route: i.route, lv: i.lv, total: i.total, M: i.M, streak: i.streak, best: i.best, hints: i.hints }; }, pomuChangeMsg, syncNow: () => syncNow(), topPomu: () => { const p = topPomu(); return { key: p.key, lv: p.lv, id: p.h ? p.h.id : '' }; }, photoIds: async () => (await photoAll()).map((r) => r.id).sort(), photoInfo: async (id) => { const r = await photoGet(id); return r ? { id: r.id, bytes: r.full.byteLength, synced: !!r.synced } : null; }, syncPhotos: () => syncPhotos(), photoGc: () => photoGc(), aiDaily: () => ({ ...aiDaily, manualLeft: manualLeft(), busy: anaUi.busy, error: anaUi.error, daily: aiDailyOn(), autoMove: aiAutoMoveOn() }), analysisContext: () => analysisContext(), checkDayRollover: () => checkDayRollover(), get calendar() { return cal; }, get gcal() { return { hasClient: gcalHasClient(), connected: gcalConnected() }; }, pullCalendar: () => pullCalendar(), parseAnalysis, maybeDailyAnalysis: () => maybeDailyAnalysis(), runAnalysis: () => runAnalysis(true), photoDims: async (id) => { const r = await photoGet(id); if (!r) return null; const b = await createImageBitmap(new Blob([r.full], { type: 'image/jpeg' })); return [b.width, b.height, r.full.byteLength]; } };
 })();

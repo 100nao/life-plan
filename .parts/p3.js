@@ -268,6 +268,7 @@
     const out = [sectionHead('設定・バックアップ')];
     out.push(syncCard());
     out.push(aiCard().replace('<ul class="small muted note-list">', aiDailySettings() + '<ul class="small muted note-list">'));
+    out.push(gcalCard());
     out.push(`<section class="card">
       <div class="card-head"><h2>ファイルでバックアップ</h2></div>
       <p class="muted small">データはこの端末のブラウザ内（localStorage）に保存されています。${sync.connected ? 'GitHub にも自動で保存されています。' : '機種変更やブラウザのデータ削除に備えて、ときどき書き出してください。'}</p>
@@ -309,7 +310,7 @@
       ${!isStandalone() ? '<p class="muted small">iPhone: Safariの共有ボタン →「ホーム画面に追加」でアプリとして使えます（HTTPSで公開されている必要があります）。</p>' : ''}
       <div class="btn-row"><button class="btn ghost danger small" data-action="wipeAll">すべてのデータを削除</button></div>
     </section>`);
-    if (arg === 'sync' || arg === 'ai') setTimeout(() => { const c = $(arg === 'ai' ? '#aiCard' : '#syncCard'); if (c) c.scrollIntoView({ block: 'start' }); }, 0);
+    if (arg === 'sync' || arg === 'ai' || arg === 'gcal') setTimeout(() => { const c = $(arg === 'ai' ? '#aiCard' : arg === 'gcal' ? '#gcalCard' : '#syncCard'); if (c) c.scrollIntoView({ block: 'start' }); }, 0);
     return out.join('');
   }
   const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;

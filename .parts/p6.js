@@ -207,6 +207,13 @@
       if (!(await confirmDialog('この端末に保存した Gemini APIキーを削除します。', '削除する', true))) return;
       ai.key = ''; saveAi(); aiUi.showKey = false; rerender(); toast('APIキーを削除しました');
     },
+    gcalConnect: () => gcalConnectInteractive(),
+    gcalRefresh: async () => { try { await pullCalendar(); rerender(); toast('Googleカレンダーを取得しました ✓'); } catch (e) { toast('⚠️ ' + (e.message || e)); } },
+    gcalDisconnect: async () => {
+      if (!(await confirmDialog('この端末の Googleカレンダー連携を解除します（クライアントIDとトークンを削除します。Google側の予定は消えません）。', '解除する', true))) return;
+      try { if (gcal.token && window.google && google.accounts && google.accounts.oauth2) google.accounts.oauth2.revoke(gcal.token, () => {}); } catch (e) { /* noop */ }
+      gcal = { clientId: '', token: '', expiresAt: 0 }; gcalTokenClient = null; saveGcal(); rerender(); toast('連携を解除しました');
+    },
     syncDisconnect: async () => {
       if (!(await confirmDialog('この端末の GitHub 接続を解除し、トークンを削除します（GitHub 上のデータとこの端末のデータは残ります）。', '解除する', true))) return;
       sync = { ...SYNC_DEFAULTS, owner: sync.owner, repo: sync.repo, branch: sync.branch, path: sync.path, inboxPath: sync.inboxPath };
@@ -274,6 +281,13 @@
       case 'habit': submitHabit(f); break;
       case 'countdown': submitCountdown(f); break;
       case 'syncSetup': testConnection(f); break;
+      case 'gcalSetup': {
+        const cid = String(fd.get('clientId') || '').trim();
+        if (cid !== gcal.clientId) { gcal.clientId = cid; gcal.token = ''; gcal.expiresAt = 0; gcalTokenClient = null; }
+        saveGcal(); rerender();
+        toast(cid ? 'クライアントIDを保存しました。続けて「Googleと連携する」を押してください' : 'クライアントIDを消しました');
+        break;
+      }
       case 'photoJournal': submitPhotoJournal(f); break;
       case 'obsidianPaste': submitObsidianPaste(f); break;
       case 'aiChat': { const t = String(fd.get('text') || ''); if (t.trim()) aiSend(t); break; }
@@ -391,5 +405,5 @@
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') setTimeout(() => maybeDailyAnalysis(), 800); });
 
   // テスト・デバッグ用（読み取りのみ）
-  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, pomu: (h, today) => { const i = pomuInfo(normHabit(h), today); return { key: i.key, name: i.name, route: i.route, lv: i.lv, total: i.total, M: i.M, streak: i.streak, best: i.best, hints: i.hints }; }, pomuChangeMsg, syncNow: () => syncNow(), topPomu: () => { const p = topPomu(); return { key: p.key, lv: p.lv, id: p.h ? p.h.id : '' }; }, photoIds: async () => (await photoAll()).map((r) => r.id).sort(), photoInfo: async (id) => { const r = await photoGet(id); return r ? { id: r.id, bytes: r.full.byteLength, synced: !!r.synced } : null; }, syncPhotos: () => syncPhotos(), photoGc: () => photoGc(), aiDaily: () => ({ ...aiDaily, manualLeft: manualLeft(), busy: anaUi.busy, error: anaUi.error, daily: aiDailyOn(), autoMove: aiAutoMoveOn() }), analysisContext: () => analysisContext(), checkDayRollover: () => checkDayRollover(), get calendar() { return cal; }, pullCalendar: () => pullCalendar(), parseAnalysis, maybeDailyAnalysis: () => maybeDailyAnalysis(), runAnalysis: () => runAnalysis(true), photoDims: async (id) => { const r = await photoGet(id); if (!r) return null; const b = await createImageBitmap(new Blob([r.full], { type: 'image/jpeg' })); return [b.width, b.height, r.full.byteLength]; } };
+  window.LifePlan = { get state() { return state; }, get sync() { return { ...sync, token: sync.token ? '(保存済み)' : '' }; }, get syncState() { return syncState; }, get swStatus() { return swStatus; }, version: APP_VERSION, get ai() { return { hasKey: !!ai.key, model: ai.model, share: ai.share, history: aiHist.map((m) => ({ ...m })) }; }, aiSystemPrompt: () => aiSystemPrompt(), parseNote, parseStepLines, extractJson, pomu: (h, today) => { const i = pomuInfo(normHabit(h), today); return { key: i.key, name: i.name, route: i.route, lv: i.lv, total: i.total, M: i.M, streak: i.streak, best: i.best, hints: i.hints }; }, pomuChangeMsg, syncNow: () => syncNow(), topPomu: () => { const p = topPomu(); return { key: p.key, lv: p.lv, id: p.h ? p.h.id : '' }; }, photoIds: async () => (await photoAll()).map((r) => r.id).sort(), photoInfo: async (id) => { const r = await photoGet(id); return r ? { id: r.id, bytes: r.full.byteLength, synced: !!r.synced } : null; }, syncPhotos: () => syncPhotos(), photoGc: () => photoGc(), aiDaily: () => ({ ...aiDaily, manualLeft: manualLeft(), busy: anaUi.busy, error: anaUi.error, daily: aiDailyOn(), autoMove: aiAutoMoveOn() }), analysisContext: () => analysisContext(), checkDayRollover: () => checkDayRollover(), get calendar() { return cal; }, get gcal() { return { hasClient: gcalHasClient(), connected: gcalConnected() }; }, pullCalendar: () => pullCalendar(), parseAnalysis, maybeDailyAnalysis: () => maybeDailyAnalysis(), runAnalysis: () => runAnalysis(true), photoDims: async (id) => { const r = await photoGet(id); if (!r) return null; const b = await createImageBitmap(new Blob([r.full], { type: 'image/jpeg' })); return [b.width, b.height, r.full.byteLength]; } };
 })();

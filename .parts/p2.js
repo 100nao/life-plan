@@ -122,6 +122,8 @@
   // v1.8.0：分類フィルターは廃止し、期限（targetDate＝〆切日）フィルターに置き換えた。未整理の項目も既定表示
   // （期限：すべて・未完了のみ）に出るので、そこから届く。行は左スワイプで「削除」ボタンが出る
   // （v1.7.1。実処理は p6 のスワイプ処理＋既存 deleteItem アクション）。
+  // v1.8.7：並びの既定を「手動」にした。手動時は各行に ⠿ ハンドルが出て、長押しドラッグ／ハンドルの
+  // ドラッグで並び替えできる（実処理は p6、順序の保持は p1 の ord／applyManualOrder）。
   const DUE_FILTERS = { today: '今日中', week: '今週中', month: '1ヶ月以内', over: '1ヶ月以上' };
   function dueMatch(i, f) {
     if (!f) return true;
@@ -140,6 +142,7 @@
     const list = all.filter((i) => dueMatch(i, w.due) && (!w.cat || i.category === w.cat) && (!w.imp || i.importance === w.imp) && (!w.tf || i.timeframe === w.tf)
       && (w.status === 'all' ? true : w.status === 'open' ? i.status !== 'done' : i.status === w.status));
     const sorters = {
+      manual: compareManual, // v1.8.7：手動並び順（ord 昇順）
       updated: (a, b) => b.updatedAt.localeCompare(a.updatedAt),
       created: (a, b) => b.createdAt.localeCompare(a.createdAt),
       importance: (a, b) => IMPORTANCE_ORDER[a.importance] - IMPORTANCE_ORDER[b.importance] || b.updatedAt.localeCompare(a.updatedAt),
@@ -157,13 +160,15 @@
       <select data-change="wishFilter" data-k="imp" aria-label="重要度">${options(IMPORTANCE, w.imp, '重要度: すべて')}</select>
       <select data-change="wishFilter" data-k="tf" aria-label="時期">${options(TIMEFRAME, w.tf, '時期: すべて')}</select>
       <select data-change="wishFilter" data-k="status" aria-label="状態">${opt('all', '状態: すべて', w.status)}${opt('open', '未完了のみ', w.status)}${options(STATUS, w.status)}</select>
-      <select data-change="wishFilter" data-k="sort" aria-label="並び替え">${opt('updated', '並び: 更新順', w.sort)}${opt('created', '並び: 作成順', w.sort)}${opt('importance', '並び: 重要度', w.sort)}${opt('timeframe', '並び: 時期', w.sort)}${opt('date', '並び: 期限', w.sort)}${opt('title', '並び: 名前', w.sort)}</select>
+      <select data-change="wishFilter" data-k="sort" aria-label="並び替え">${opt('manual', '並び: 手動', w.sort)}${opt('updated', '並び: 更新順', w.sort)}${opt('created', '並び: 作成順', w.sort)}${opt('importance', '並び: 重要度', w.sort)}${opt('timeframe', '並び: 時期', w.sort)}${opt('date', '並び: 期限', w.sort)}${opt('title', '並び: 名前', w.sort)}</select>
     </div>`);
+    const manual = w.sort === 'manual';
+    if (manual && list.length > 1) out.push('<p class="muted small task-order-hint">⠿ のドラッグ、または行の長押しドラッグで並び替えできます</p>');
     if (!all.length) {
       out.push(emptyState('タスクはまだありません', 'やるべきこと、行ってみたい場所、挑戦したいこと…。思いついたら「＋」から追加しましょう。',
         `<button class="btn primary" data-action="quickAdd" data-list="task">＋ タスクを追加</button><button class="btn soft" data-action="addSamples">サンプルを追加</button>`));
     } else if (!list.length) out.push('<p class="muted center pad">条件に合う項目はありません。</p>');
-    else out.push(`<div class="list">${list.map((i) => `<div class="task-row-wrap" data-task-wrap="${i.id}"><button type="button" class="task-row-del" data-action="deleteItem" data-id="${i.id}" tabindex="-1" aria-label="削除">削除</button><details class="task-row" data-task-row="${i.id}"><summary><span class="task-row-ico" aria-hidden="true">${itemIcon(i)}</span><span class="grow"><b>${esc(trunc(i.title, 42))}</b></span>${chip(LISTS[i.list], 'list')}${i.status === 'done' ? chip('完了', 'doing') : ''}<span class="task-row-chev" aria-hidden="true">›</span></summary><div class="task-row-body">${itemCard(i, 'wish')}</div></details></div>`).join('')}</div>`);
+    else out.push(`<div class="list${manual ? ' manual-order' : ''}">${list.map((i) => `<div class="task-row-wrap" data-task-wrap="${i.id}"><button type="button" class="task-row-del" data-action="deleteItem" data-id="${i.id}" tabindex="-1" aria-label="削除">削除</button><details class="task-row" data-task-row="${i.id}"><summary>${manual ? '<span class="task-drag-handle" data-drag-handle aria-hidden="true">⠿</span>' : ''}<span class="task-row-ico" aria-hidden="true">${itemIcon(i)}</span><span class="grow"><b>${esc(trunc(i.title, 42))}</b></span>${chip(LISTS[i.list], 'list')}${i.status === 'done' ? chip('完了', 'doing') : ''}<span class="task-row-chev" aria-hidden="true">›</span></summary><div class="task-row-body">${itemCard(i, 'wish')}</div></details></div>`).join('')}</div>`);
     return out.join('');
   }
 

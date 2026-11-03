@@ -1243,6 +1243,15 @@ div.gtab-tg-head { cursor: default; }
 .task-row-wrap.swiped .task-row { transform: translateX(-76px); }
 .task-row > summary { touch-action: pan-y; }
 .task-row-del { position: absolute; top: 0; right: 0; bottom: 0; width: 76px; z-index: 0; border: 0; border-radius: var(--radius); background: var(--danger); color: #fff; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+/* v1.8.7：TASK手動並び替え（ハンドル／ドラッグ中／挿入位置） */
+.task-drag-handle { flex: none; color: var(--muted); font-size: 15px; line-height: 1; padding: 6px 3px; margin: -6px 0; cursor: grab; touch-action: none; }
+.list.manual-order .task-row > summary { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.task-order-hint { margin: 0 2px 10px; }
+.task-row-wrap.reorder-src { z-index: 6; }
+.task-row-wrap.reorder-src .task-row { box-shadow: 0 12px 30px rgba(0, 0, 0, .30); }
+.list.reorder-active .task-row { transition: none; }
+.task-row-wrap.drop-before .task-row { box-shadow: 0 -3px 0 0 var(--primary), var(--shadow); }
+.task-row-wrap.drop-after .task-row { box-shadow: 0 3px 0 0 var(--primary), var(--shadow); }
 
 /* v1.8.0：マトリクスはほぼ全画面（見出しなし。フィルターの下から下部タブバーの上までグリッドが使い切る） */
 body.route-matrix .fab { display: none; }

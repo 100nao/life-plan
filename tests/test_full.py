@@ -778,7 +778,7 @@ with sync_playwright() as p:
     def dd(n): return (TD - datetime.timedelta(days=n)).isoformat()
     def pomu(done, start, today=None):
         return pg.evaluate("([d, s, t]) => LifePlan.pomu({id: 'x', name: 't', startDate: s, done: d}, t)", [done, start, today or TD.isoformat()])
-    check('バージョン 1.8.5', S(pg, 'LifePlan.version') == '1.8.5')
+    check('バージョン 1.8.7', S(pg, 'LifePlan.version') == '1.8.7')
     check('習慣：state.habits が配列', S(pg, 'Array.isArray(LifePlan.state.habits)'))
     # ぽむのルール
     r = pomu([], dd(0)); check('ぽむ：0日はたまご（stage-1）', r['key'] == 'stage-1' and r['lv'] == 1, r)
@@ -1065,7 +1065,7 @@ with sync_playwright() as p:
     db = pg.locator('#drawer').bounding_box()
     check('スワイプ：右から左へなぞるとメニューが開く', is_open() and pg.is_visible('#drawerBackdrop'))
     check('スワイプ：メニューは右側から出る', db and abs(db['x'] + db['width'] - 390) <= 2 and db['x'] > 30, db)
-    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.8.5' in pg.inner_text('#drawer [data-action=forceUpdate]'))
+    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.8.7' in pg.inner_text('#drawer [data-action=forceUpdate]'))
     shot(pg, 'v131_menu.png')
     swipe(90, 500, 330, 505)
     check('スワイプ：左から右へで閉じる', not is_open())
@@ -2146,6 +2146,80 @@ with sync_playwright() as p:
     q3text = S(qp, "document.querySelector('.quote-text') ? document.querySelector('.quote-text').textContent.trim() : ''")
     check('v1.8.5：開き直す（再読み込み）と前回と違う名言になる', q3text != '' and q3text != q2text, (q2text, q3text))
     qc.close()
+
+    # ── v1.8.7：TASK一覧のドラッグ並び替え（手動ソート・長押し／ハンドル・フィルタ中も相対順を保持）──
+    rc = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2, locale='ja-JP', timezone_id='Asia/Tokyo', service_workers='block')
+    rp = rc.new_page(); rp.on('pageerror', lambda e: errors.append('REORDER ' + str(e)))
+    rbase = datetime.datetime(2026, 11, 1, 0, 0, tzinfo=datetime.timezone.utc)
+    def rts(h): return (rbase + datetime.timedelta(hours=h)).isoformat()
+    rseed = {'items': [
+        {'id': 'r5', 'list': 'task', 'title': '並替：完了済み', 'status': 'done', 'completedAt': rts(4), 'createdAt': rts(4), 'updatedAt': rts(4)},
+        {'id': 'r1', 'list': 'task', 'title': '並替：1番目', 'status': 'todo', 'createdAt': rts(3), 'updatedAt': rts(3)},
+        {'id': 'r2', 'list': 'task', 'title': '並替：2番目', 'status': 'todo', 'createdAt': rts(2), 'updatedAt': rts(2)},
+        {'id': 'r3', 'list': 'wish', 'title': '並替：3番目', 'status': 'todo', 'createdAt': rts(1), 'updatedAt': rts(1)},
+        {'id': 'r4', 'list': 'later', 'title': '並替：4番目', 'status': 'todo', 'createdAt': rts(0), 'updatedAt': rts(0)}],
+        'journal': [], 'habits': [], 'lessons': []}
+    rp.goto(URL); wait_idle(rp, 400)
+    rp.evaluate(f"localStorage.setItem('lifeplan.v1', JSON.stringify({json.dumps(rseed, ensure_ascii=False)}))")
+    rp.reload(); wait_idle(rp, 500)
+    rp.evaluate("location.hash = '#wish'"); wait_idle(rp, 500)
+    def row_ids():
+        return rp.evaluate("[...document.querySelectorAll('.task-row')].map(e => e.dataset.taskRow)")
+    def ord_ids():
+        return S(rp, "[...LifePlan.state.items].sort((a, b) => a.ord - b.ord).map(i => i.id)")
+    check('v1.8.7：並びの初期選択は「手動」', rp.eval_on_selector('select[data-change=wishFilter][data-k=sort]', 's => s.value') == 'manual')
+    check('v1.8.7：手動時は各行にドラッグハンドルとヒントが出る', rp.locator('.task-drag-handle').count() == 4 and rp.locator('.task-order-hint').count() == 1)
+    check('v1.8.7：初期の手動順は更新順（新しい順）', row_ids() == ['r1', 'r2', 'r3', 'r4'], row_ids())
+    # 長押しドラッグ：r1 を r2 の下へ
+    s1 = rp.locator('.task-row[data-task-row="r1"] > summary'); s1.scroll_into_view_if_needed(); wait_idle(rp, 300)
+    b1 = s1.bounding_box(); cx1, cy1 = b1['x'] + b1['width'] / 2, b1['y'] + b1['height'] / 2
+    w2 = rp.locator('.task-row-wrap[data-task-wrap="r2"]').bounding_box()
+    rp.mouse.move(cx1, cy1); rp.mouse.down(); rp.wait_for_timeout(520)  # 長押し（320ms）成立まで静止
+    check('v1.8.7：長押しでドラッグ状態になる', rp.evaluate("document.querySelector('.task-row-wrap[data-task-wrap=\"r1\"]').classList.contains('reorder-src')") is True)
+    rp.mouse.move(cx1, w2['y'] + w2['height'] - 4, steps=12); rp.wait_for_timeout(120); rp.mouse.up(); wait_idle(rp, 500)
+    check('v1.8.7：長押しドラッグで並び替えできる', row_ids() == ['r2', 'r1', 'r3', 'r4'], row_ids())
+    check('v1.8.7：ドラッグ直後のクリックで行は開かない', rp.evaluate("document.querySelector('.task-row[data-task-row=\"r1\"]').open") is False)
+    check('v1.8.7：隠れている完了済み（r5）の位置は保たれる（ord 全体順）', ord_ids() == ['r5', 'r2', 'r1', 'r3', 'r4'], ord_ids())
+    check('v1.8.7：ord が localStorage に保存される', S(rp, "JSON.parse(localStorage.getItem('lifeplan.v1')).items.every(i => typeof i.ord === 'number')") is True)
+    rp.reload(); wait_idle(rp, 600); rp.evaluate("location.hash = '#wish'"); wait_idle(rp, 400)
+    check('v1.8.7：再読み込み後も順序を維持', row_ids() == ['r2', 'r1', 'r3', 'r4'], row_ids())
+    rp.select_option('select[data-change=wishFilter][data-k=status]', 'all'); wait_idle(rp, 400)
+    check('v1.8.7：状態＝すべてでは完了済みが元の位置（先頭）に出る', row_ids() == ['r5', 'r2', 'r1', 'r3', 'r4'], row_ids())
+    rp.select_option('select[data-change=wishFilter][data-k=status]', 'open'); wait_idle(rp, 400)
+    # ハンドルのドラッグ：r4 を1つ上（r3 の上）へ（長押し不要で即開始）
+    h4 = rp.locator('.task-row[data-task-row="r4"] .task-drag-handle'); h4.scroll_into_view_if_needed(); wait_idle(rp, 300)
+    hb = h4.bounding_box(); hx, hy = hb['x'] + hb['width'] / 2, hb['y'] + hb['height'] / 2
+    w3 = rp.locator('.task-row-wrap[data-task-wrap="r3"]').bounding_box()
+    rp.mouse.move(hx, hy); rp.mouse.down(); rp.wait_for_timeout(80)
+    rp.mouse.move(hx, w3['y'] + 4, steps=12); rp.wait_for_timeout(120); rp.mouse.up(); wait_idle(rp, 500)
+    check('v1.8.7：ハンドルのドラッグで1つ上へ移動できる', row_ids() == ['r2', 'r1', 'r4', 'r3'], row_ids())
+    check('v1.8.7：ハンドル移動後も隠れた項目の位置は不変', ord_ids() == ['r5', 'r2', 'r1', 'r4', 'r3'], ord_ids())
+    # タップで開閉は従来通り
+    rp.click('.task-row[data-task-row="r3"] > summary'); wait_idle(rp, 300)
+    check('v1.8.7：タップで行が開く（従来通り）', rp.evaluate("document.querySelector('.task-row[data-task-row=\"r3\"]').open") is True)
+    rp.click('.task-row[data-task-row="r3"] > summary'); wait_idle(rp, 300)
+    check('v1.8.7：タップで行が閉じる（従来通り）', rp.evaluate("document.querySelector('.task-row[data-task-row=\"r3\"]').open") is False)
+    # 横スワイプ削除は従来通り（並び替えが横方向を横取りしない）
+    s1b = rp.locator('.task-row[data-task-row="r1"] > summary'); s1b.scroll_into_view_if_needed(); wait_idle(rp, 300)
+    bb1 = s1b.bounding_box(); sx, sy = bb1['x'] + bb1['width'] / 2, bb1['y'] + bb1['height'] / 2
+    rp.mouse.move(sx, sy); rp.mouse.down(); rp.mouse.move(sx - 120, sy, steps=10); rp.mouse.up(); wait_idle(rp, 500)
+    check('v1.8.7：左スワイプで削除ボタンが出る（従来通り）', rp.evaluate("document.querySelector('.task-row-wrap[data-task-wrap=\"r1\"]').classList.contains('swiped')") is True)
+    check('v1.8.7：横スワイプでは並び順は変わらない', row_ids() == ['r2', 'r1', 'r4', 'r3'], row_ids())
+    rp.click('.task-order-hint'); wait_idle(rp, 300)  # ほかを触ってスワイプを閉じる
+    # 手動以外のソートでは並び替え無効
+    rp.select_option('select[data-change=wishFilter][data-k=sort]', 'updated'); wait_idle(rp, 400)
+    check('v1.8.7：更新順ではハンドルが出ない', rp.locator('.task-drag-handle').count() == 0)
+    check('v1.8.7：更新順の表示は更新日時どおり', row_ids() == ['r1', 'r2', 'r3', 'r4'], row_ids())
+    s1c = rp.locator('.task-row[data-task-row="r1"] > summary'); s1c.scroll_into_view_if_needed(); wait_idle(rp, 300)
+    b1c = s1c.bounding_box(); cx2, cy2 = b1c['x'] + b1c['width'] / 2, b1c['y'] + b1c['height'] / 2
+    w2c = rp.locator('.task-row-wrap[data-task-wrap="r2"]').bounding_box()
+    rp.mouse.move(cx2, cy2); rp.mouse.down(); rp.wait_for_timeout(520)
+    rp.mouse.move(cx2, w2c['y'] + w2c['height'] - 4, steps=10); rp.wait_for_timeout(100); rp.mouse.up(); wait_idle(rp, 400)
+    check('v1.8.7：更新順では長押しドラッグしても並び替わらない', row_ids() == ['r1', 'r2', 'r3', 'r4'] and ord_ids() == ['r5', 'r2', 'r1', 'r4', 'r3'], (row_ids(), ord_ids()))
+    rp.select_option('select[data-change=wishFilter][data-k=sort]', 'manual'); wait_idle(rp, 400)
+    check('v1.8.7：手動に戻すと保存した順序で出る', row_ids() == ['r2', 'r1', 'r4', 'r3'], row_ids())
+    shot(rp, 'v187_task_reorder.png')
+    rc.close()
     # ── PC ──
     state_dump = pg.evaluate("localStorage.getItem('lifeplan.v1')")
     # ── Service Worker・オフライン（別コンテキスト：同期のモックと分けるため）──
@@ -2171,7 +2245,7 @@ with sync_playwright() as p:
     nav = sp.evaluate("performance.getEntriesByType('navigation')[0].name")
     check('アップデート：?v=<時刻> で読み込み直す', re.search(r'[?&]v=\d{10,}', nav) is not None and sp.evaluate('window.__beforeUpdate') is None, nav)
     check('アップデート：古いキャッシュを削除', 'lifeplan-old-test' not in sp.evaluate('caches.keys()'))
-    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.8.5' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
+    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.8.7' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
     check('アップデート：Service Worker は引き続き有効', sp.evaluate("navigator.serviceWorker.getRegistration().then(r => !!(r && r.active))"))
     swc.set_offline(True)
     sp.reload(); wait_idle(sp, 1200)

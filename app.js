@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.8.5';
+  const APP_VERSION = '1.8.7';
   // カテゴリは「プライベート」「仕事」の2択に固定（v1.8.0）。読み込み時に normCategory で寄せる
   const CATEGORIES = ['プライベート', '仕事'];
   const DEFAULT_CATEGORIES = CATEGORIES;
@@ -134,6 +134,7 @@
       sourceKey: i.sourceKey || '',
       reminderList: i.reminderList || '',
       sample: i.sample || '',
+      ord: (typeof i.ord === 'number' && isFinite(i.ord)) ? i.ord : null, // v1.8.7：TASK一覧の手動並び順（小さいほど上。未割当は null）
     };
   }
   function normLesson(l) {
@@ -322,8 +323,33 @@
     i.updatedAt = nowIso();
     if (progress) i.lastProgressAt = i.updatedAt;
   }
+  // ── v1.8.7：TASK一覧の手動並び順 ──
+  // 順番は各アイテムの ord（小さいほど上）で保持し、state ごと保存・同期される。ord 未割当（null）は
+  // 割当済みの後ろに更新順で並ぶ。初回のドラッグで全アイテムに連番（0,1,2,…）が振られ、以後は常に全件割当済みになる。
+  const itemOrd = (i) => (typeof i.ord === 'number' && isFinite(i.ord)) ? i.ord : null;
+  function compareManual(a, b) {
+    const oa = itemOrd(a), ob = itemOrd(b);
+    if (oa != null && ob != null) return oa - ob || b.updatedAt.localeCompare(a.updatedAt);
+    if (oa != null) return -1;
+    if (ob != null) return 1;
+    return b.updatedAt.localeCompare(a.updatedAt);
+  }
+  // フィルタ表示中の並び替えを全体の手動順へ反映する：見えているアイテムは「いま占めている位置」の
+  // 中だけで入れ替え、隠れているアイテムの位置はそのまま保つ。最後に全体へ連番を振り直して保存する。
+  function applyManualOrder(visibleIds) {
+    const seq = [...state.items].sort(compareManual); // 現在の手動順（全件）
+    const vis = new Set(visibleIds);
+    const queue = visibleIds.map((id) => getItem(id)).filter(Boolean);
+    let k = 0;
+    // 見えている位置には新しい可視順序を、隠れた位置には元のアイテムを置き、全体へ連番を振る
+    seq.map((it) => (vis.has(it.id) && k < queue.length ? queue[k++] : it)).forEach((it, idx) => { it.ord = idx; });
+    save();
+  }
   function addItem(data) {
     const it = normItem({ ...data, id: uid(), createdAt: nowIso(), updatedAt: nowIso() });
+    // v1.8.7：手動順が既にある場合は先頭に入れる（TASK一覧の手動表示で一番上に出る）
+    const minOrd = state.items.reduce((m, x) => { const v = itemOrd(x); return v != null && (m == null || v < m) ? v : m; }, null);
+    if (minOrd != null) it.ord = minOrd - 1;
     state.items.unshift(it);
     syncTaskCountdown(it); // v1.8.3：期限つきで作ったらカウントダウンにも出す
     save();
@@ -342,7 +368,7 @@
 
   // ───────────────────────── UI の一時状態 ─────────────────────────
   const ui = {
-    wish: { cat: '', imp: '', tf: '', status: 'open', due: '', sort: 'updated' }, // TASK画面のフィルター（期限はすべて、状態の既定は未完了のみ v1.7.1。ui はメモリ上のみで保存されないため、既定変更は更新した端末でそのまま効く）
+    wish: { cat: '', imp: '', tf: '', status: 'open', due: '', sort: 'manual' }, // TASK画面のフィルター（期限はすべて、状態の既定は未完了のみ v1.7.1。並びの既定は手動 v1.8.7。ui はメモリ上のみで保存されないため、既定変更は更新した端末でそのまま効く）
     laterSort: 'updated',
     matrixFilter: 'all',
     journalQuery: '',
@@ -478,6 +504,8 @@
   // v1.8.0：分類フィルターは廃止し、期限（targetDate＝〆切日）フィルターに置き換えた。未整理の項目も既定表示
   // （期限：すべて・未完了のみ）に出るので、そこから届く。行は左スワイプで「削除」ボタンが出る
   // （v1.7.1。実処理は p6 のスワイプ処理＋既存 deleteItem アクション）。
+  // v1.8.7：並びの既定を「手動」にした。手動時は各行に ⠿ ハンドルが出て、長押しドラッグ／ハンドルの
+  // ドラッグで並び替えできる（実処理は p6、順序の保持は p1 の ord／applyManualOrder）。
   const DUE_FILTERS = { today: '今日中', week: '今週中', month: '1ヶ月以内', over: '1ヶ月以上' };
   function dueMatch(i, f) {
     if (!f) return true;
@@ -496,6 +524,7 @@
     const list = all.filter((i) => dueMatch(i, w.due) && (!w.cat || i.category === w.cat) && (!w.imp || i.importance === w.imp) && (!w.tf || i.timeframe === w.tf)
       && (w.status === 'all' ? true : w.status === 'open' ? i.status !== 'done' : i.status === w.status));
     const sorters = {
+      manual: compareManual, // v1.8.7：手動並び順（ord 昇順）
       updated: (a, b) => b.updatedAt.localeCompare(a.updatedAt),
       created: (a, b) => b.createdAt.localeCompare(a.createdAt),
       importance: (a, b) => IMPORTANCE_ORDER[a.importance] - IMPORTANCE_ORDER[b.importance] || b.updatedAt.localeCompare(a.updatedAt),
@@ -513,13 +542,15 @@
       <select data-change="wishFilter" data-k="imp" aria-label="重要度">${options(IMPORTANCE, w.imp, '重要度: すべて')}</select>
       <select data-change="wishFilter" data-k="tf" aria-label="時期">${options(TIMEFRAME, w.tf, '時期: すべて')}</select>
       <select data-change="wishFilter" data-k="status" aria-label="状態">${opt('all', '状態: すべて', w.status)}${opt('open', '未完了のみ', w.status)}${options(STATUS, w.status)}</select>
-      <select data-change="wishFilter" data-k="sort" aria-label="並び替え">${opt('updated', '並び: 更新順', w.sort)}${opt('created', '並び: 作成順', w.sort)}${opt('importance', '並び: 重要度', w.sort)}${opt('timeframe', '並び: 時期', w.sort)}${opt('date', '並び: 期限', w.sort)}${opt('title', '並び: 名前', w.sort)}</select>
+      <select data-change="wishFilter" data-k="sort" aria-label="並び替え">${opt('manual', '並び: 手動', w.sort)}${opt('updated', '並び: 更新順', w.sort)}${opt('created', '並び: 作成順', w.sort)}${opt('importance', '並び: 重要度', w.sort)}${opt('timeframe', '並び: 時期', w.sort)}${opt('date', '並び: 期限', w.sort)}${opt('title', '並び: 名前', w.sort)}</select>
     </div>`);
+    const manual = w.sort === 'manual';
+    if (manual && list.length > 1) out.push('<p class="muted small task-order-hint">⠿ のドラッグ、または行の長押しドラッグで並び替えできます</p>');
     if (!all.length) {
       out.push(emptyState('タスクはまだありません', 'やるべきこと、行ってみたい場所、挑戦したいこと…。思いついたら「＋」から追加しましょう。',
         `<button class="btn primary" data-action="quickAdd" data-list="task">＋ タスクを追加</button><button class="btn soft" data-action="addSamples">サンプルを追加</button>`));
     } else if (!list.length) out.push('<p class="muted center pad">条件に合う項目はありません。</p>');
-    else out.push(`<div class="list">${list.map((i) => `<div class="task-row-wrap" data-task-wrap="${i.id}"><button type="button" class="task-row-del" data-action="deleteItem" data-id="${i.id}" tabindex="-1" aria-label="削除">削除</button><details class="task-row" data-task-row="${i.id}"><summary><span class="task-row-ico" aria-hidden="true">${itemIcon(i)}</span><span class="grow"><b>${esc(trunc(i.title, 42))}</b></span>${chip(LISTS[i.list], 'list')}${i.status === 'done' ? chip('完了', 'doing') : ''}<span class="task-row-chev" aria-hidden="true">›</span></summary><div class="task-row-body">${itemCard(i, 'wish')}</div></details></div>`).join('')}</div>`);
+    else out.push(`<div class="list${manual ? ' manual-order' : ''}">${list.map((i) => `<div class="task-row-wrap" data-task-wrap="${i.id}"><button type="button" class="task-row-del" data-action="deleteItem" data-id="${i.id}" tabindex="-1" aria-label="削除">削除</button><details class="task-row" data-task-row="${i.id}"><summary>${manual ? '<span class="task-drag-handle" data-drag-handle aria-hidden="true">⠿</span>' : ''}<span class="task-row-ico" aria-hidden="true">${itemIcon(i)}</span><span class="grow"><b>${esc(trunc(i.title, 42))}</b></span>${chip(LISTS[i.list], 'list')}${i.status === 'done' ? chip('完了', 'doing') : ''}<span class="task-row-chev" aria-hidden="true">›</span></summary><div class="task-row-body">${itemCard(i, 'wish')}</div></details></div>`).join('')}</div>`);
     return out.join('');
   }
 
@@ -4331,6 +4362,7 @@
     rowSwipe.base = rowSwipe.wrap && rowSwipe.wrap.classList.contains('swiped') ? -ROW_DEL_W : 0; rowSwipe.off = rowSwipe.base;
   }, { passive: true });
   document.addEventListener('pointermove', (e) => {
+    if (rdrag.active) return; // v1.8.7：並び替えドラッグ中はスワイプ判定をしない（rdrag は本ファイル後方で定義。イベント発火時点では初期化済み）
     if (!rowSwipe.row || e.pointerId !== rowSwipe.id) return;
     const dx = e.clientX - rowSwipe.x, dy = e.clientY - rowSwipe.y;
     if (!rowSwipe.lock) {
@@ -4373,6 +4405,119 @@
     }
     closeRowSwipe(null); // ほかの場所を触ったら閉じる
   }, true);
+
+  // ── TASK行のドラッグ並び替え（v1.8.7。「並び: 手動」のときだけ有効） ──
+  // 行を長押し（約320ms・ほぼ静止）してから上下へドラッグすると並び替えられる。⠿ ハンドルからは即ドラッグ開始。
+  // 横方向はスワイプ削除（上記 rowSwipe）が優先で、縦スクロールとも競合しないよう、長押しが成立するまでは
+  // 一切横取りしない（成立前に動いたら通常操作に譲る）。タッチは touch イベント（マトリクスの長押しドラッグと
+  // 同じ方式で touchmove を preventDefault）、マウスは pointer イベントで追う。
+  // ドロップ時は「見えている行だけを、占めていた位置の中で入れ替える」（p1 の applyManualOrder）ので、
+  // フィルタで隠れているタスクの順序は壊れない。ドラッグ直後の click（行の開閉）は飲み込む。
+  const rdrag = { sum: null, wrap: null, list: null, id: '', ids: [], others: [], target: -1, x0: 0, y0: 0, active: false, pending: false, timer: 0, pid: -1, tid: -1, swallowUntil: 0 };
+  const rdragOk = (sum) => {
+    if (!sum || route().name !== 'wish' || ui.wish.sort !== 'manual') return false;
+    const wrap = sum.closest('.task-row-wrap');
+    return !!wrap && !wrap.classList.contains('swiped');
+  };
+  function rdragSetup(sum, x, y) {
+    const wrap = sum.closest('.task-row-wrap');
+    rdrag.sum = sum; rdrag.wrap = wrap; rdrag.list = wrap.closest('.list');
+    rdrag.id = wrap.dataset.taskWrap;
+    rdrag.ids = [...rdrag.list.querySelectorAll('.task-row-wrap')].map((w) => w.dataset.taskWrap);
+    rdrag.others = []; rdrag.target = rdrag.ids.indexOf(rdrag.id);
+    rdrag.x0 = x; rdrag.y0 = y; rdrag.pending = true; rdrag.active = false;
+  }
+  function rdragCancelPending() {
+    clearTimeout(rdrag.timer);
+    if (!rdrag.active) { rdrag.pending = false; rdrag.sum = null; rdrag.wrap = null; rdrag.list = null; rdrag.pid = -1; rdrag.tid = -1; }
+  }
+  function rdragActivate() {
+    if (!rdrag.pending || rdrag.active) return;
+    rdrag.active = true;
+    rowSwipe.row = null; // スワイプ削除の追跡を止め、残っていた変形も戻す
+    const row = rdrag.wrap.querySelector(':scope > .task-row');
+    if (row) { row.style.transform = ''; row.classList.remove('dragging'); }
+    closeRowSwipe(null);
+    rdrag.wrap.classList.add('reorder-src');
+    if (rdrag.list) rdrag.list.classList.add('reorder-active');
+    rdragTrack(rdrag.y0);
+    if (navigator.vibrate) { try { navigator.vibrate(10); } catch (err) { /* noop */ } }
+  }
+  function rdragTrack(y) {
+    rdrag.wrap.style.transform = `translateY(${y - rdrag.y0}px)`;
+    const others = [...rdrag.list.querySelectorAll('.task-row-wrap')].filter((w) => w !== rdrag.wrap);
+    let t = others.length;
+    for (let k = 0; k < others.length; k++) {
+      const r = others[k].getBoundingClientRect();
+      if (y < r.top + r.height / 2) { t = k; break; }
+    }
+    rdrag.others = others; rdrag.target = t;
+    others.forEach((w) => w.classList.remove('drop-before', 'drop-after'));
+    if (others.length) (t < others.length ? others[t] : others[others.length - 1]).classList.add(t < others.length ? 'drop-before' : 'drop-after');
+  }
+  function rdragFinish(commit) {
+    const wasActive = rdrag.active;
+    let newIds = null;
+    if (wasActive && commit && rdrag.others.length) {
+      newIds = rdrag.others.map((w) => w.dataset.taskWrap);
+      newIds.splice(Math.max(0, Math.min(rdrag.target, newIds.length)), 0, rdrag.id);
+      if (newIds.join() === rdrag.ids.join()) newIds = null; // 元の位置に戻しただけなら何もしない
+    }
+    clearTimeout(rdrag.timer);
+    if (rdrag.wrap) { rdrag.wrap.classList.remove('reorder-src'); rdrag.wrap.style.transform = ''; }
+    if (rdrag.list) rdrag.list.classList.remove('reorder-active');
+    $$('.task-row-wrap.drop-before, .task-row-wrap.drop-after').forEach((w) => w.classList.remove('drop-before', 'drop-after'));
+    rdrag.sum = null; rdrag.wrap = null; rdrag.list = null; rdrag.pending = false; rdrag.active = false; rdrag.pid = -1; rdrag.tid = -1;
+    if (wasActive) rdrag.swallowUntil = Date.now() + 450; // ドラッグ直後の click で行が開閉しないように飲み込む
+    if (newIds) { applyManualOrder(newIds); rerender(); }
+  }
+  const rdragMovedOff = (x, y) => Math.abs(x - rdrag.x0) > 8 || Math.hypot(x - rdrag.x0, y - rdrag.y0) > 10; // 横はスワイプ、素早い移動はスクロールに譲る
+  // マウス：ハンドルは即開始、それ以外は長押しで開始
+  document.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'touch' || e.button !== 0 || rdrag.pending) return;
+    const sum = e.target.closest && e.target.closest('.task-row > summary');
+    if (!sum || !rdragOk(sum)) return;
+    rdragSetup(sum, e.clientX, e.clientY);
+    rdrag.pid = e.pointerId;
+    if (e.target.closest('[data-drag-handle]')) rdragActivate();
+    else rdrag.timer = setTimeout(rdragActivate, 320);
+  }, { passive: true });
+  document.addEventListener('pointermove', (e) => {
+    if (!rdrag.pending || e.pointerId !== rdrag.pid) return;
+    if (!rdrag.active) { if (rdragMovedOff(e.clientX, e.clientY)) rdragCancelPending(); return; }
+    rdragTrack(e.clientY);
+  }, { passive: true });
+  document.addEventListener('pointerup', (e) => { if (rdrag.pending && e.pointerId === rdrag.pid) rdragFinish(true); }, { passive: true });
+  document.addEventListener('pointercancel', (e) => { if (rdrag.pending && e.pointerId === rdrag.pid) rdragFinish(false); }, { passive: true });
+  // タッチ：マトリクス版と同じく touch イベントで追う（長押し成立後のみ preventDefault でスクロールを止める）
+  document.addEventListener('touchstart', (e) => {
+    if (rdrag.pending || e.touches.length !== 1) return;
+    const sum = e.target.closest && e.target.closest('.task-row > summary');
+    if (!sum || !rdragOk(sum)) return;
+    if (e.target.closest('button, a, input, select, textarea, label')) return; // summary 内の操作部品からは始めない
+    const t = e.touches[0];
+    rdragSetup(sum, t.clientX, t.clientY);
+    rdrag.tid = t.identifier;
+    if (e.target.closest('[data-drag-handle]')) rdragActivate();
+    else rdrag.timer = setTimeout(rdragActivate, 320);
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (!rdrag.pending) return;
+    const t = [...e.touches].find((x) => x.identifier === rdrag.tid);
+    if (!t) return;
+    if (!rdrag.active) { if (rdragMovedOff(t.clientX, t.clientY)) rdragCancelPending(); return; }
+    e.preventDefault();
+    rdragTrack(t.clientY);
+  }, { passive: false });
+  document.addEventListener('touchend', (e) => { if (rdrag.pending && ![...e.touches].some((x) => x.identifier === rdrag.tid)) rdragFinish(true); });
+  document.addEventListener('touchcancel', () => { if (rdrag.pending) rdragFinish(false); });
+  document.addEventListener('click', (e) => { // capture：既存の委譲 click ハンドラより先に判定する
+    if (Date.now() < rdrag.swallowUntil && e.target.closest && e.target.closest('.task-row-wrap')) { e.preventDefault(); e.stopPropagation(); }
+  }, true);
+  document.addEventListener('contextmenu', (e) => {
+    if (rdrag.active && e.target.closest && e.target.closest('.task-row-wrap')) e.preventDefault();
+  });
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && e.target.matches('form[data-form=aiChat] textarea') && window.matchMedia('(pointer: fine)').matches) { e.preventDefault(); e.target.form.requestSubmit(); return; }
     if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role=button][data-action]')) { e.preventDefault(); e.target.click(); }

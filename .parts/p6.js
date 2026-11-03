@@ -290,6 +290,7 @@
     rowSwipe.base = rowSwipe.wrap && rowSwipe.wrap.classList.contains('swiped') ? -ROW_DEL_W : 0; rowSwipe.off = rowSwipe.base;
   }, { passive: true });
   document.addEventListener('pointermove', (e) => {
+    if (rdrag.active) return; // v1.8.7：並び替えドラッグ中はスワイプ判定をしない（rdrag は本ファイル後方で定義。イベント発火時点では初期化済み）
     if (!rowSwipe.row || e.pointerId !== rowSwipe.id) return;
     const dx = e.clientX - rowSwipe.x, dy = e.clientY - rowSwipe.y;
     if (!rowSwipe.lock) {
@@ -332,6 +333,119 @@
     }
     closeRowSwipe(null); // ほかの場所を触ったら閉じる
   }, true);
+
+  // ── TASK行のドラッグ並び替え（v1.8.7。「並び: 手動」のときだけ有効） ──
+  // 行を長押し（約320ms・ほぼ静止）してから上下へドラッグすると並び替えられる。⠿ ハンドルからは即ドラッグ開始。
+  // 横方向はスワイプ削除（上記 rowSwipe）が優先で、縦スクロールとも競合しないよう、長押しが成立するまでは
+  // 一切横取りしない（成立前に動いたら通常操作に譲る）。タッチは touch イベント（マトリクスの長押しドラッグと
+  // 同じ方式で touchmove を preventDefault）、マウスは pointer イベントで追う。
+  // ドロップ時は「見えている行だけを、占めていた位置の中で入れ替える」（p1 の applyManualOrder）ので、
+  // フィルタで隠れているタスクの順序は壊れない。ドラッグ直後の click（行の開閉）は飲み込む。
+  const rdrag = { sum: null, wrap: null, list: null, id: '', ids: [], others: [], target: -1, x0: 0, y0: 0, active: false, pending: false, timer: 0, pid: -1, tid: -1, swallowUntil: 0 };
+  const rdragOk = (sum) => {
+    if (!sum || route().name !== 'wish' || ui.wish.sort !== 'manual') return false;
+    const wrap = sum.closest('.task-row-wrap');
+    return !!wrap && !wrap.classList.contains('swiped');
+  };
+  function rdragSetup(sum, x, y) {
+    const wrap = sum.closest('.task-row-wrap');
+    rdrag.sum = sum; rdrag.wrap = wrap; rdrag.list = wrap.closest('.list');
+    rdrag.id = wrap.dataset.taskWrap;
+    rdrag.ids = [...rdrag.list.querySelectorAll('.task-row-wrap')].map((w) => w.dataset.taskWrap);
+    rdrag.others = []; rdrag.target = rdrag.ids.indexOf(rdrag.id);
+    rdrag.x0 = x; rdrag.y0 = y; rdrag.pending = true; rdrag.active = false;
+  }
+  function rdragCancelPending() {
+    clearTimeout(rdrag.timer);
+    if (!rdrag.active) { rdrag.pending = false; rdrag.sum = null; rdrag.wrap = null; rdrag.list = null; rdrag.pid = -1; rdrag.tid = -1; }
+  }
+  function rdragActivate() {
+    if (!rdrag.pending || rdrag.active) return;
+    rdrag.active = true;
+    rowSwipe.row = null; // スワイプ削除の追跡を止め、残っていた変形も戻す
+    const row = rdrag.wrap.querySelector(':scope > .task-row');
+    if (row) { row.style.transform = ''; row.classList.remove('dragging'); }
+    closeRowSwipe(null);
+    rdrag.wrap.classList.add('reorder-src');
+    if (rdrag.list) rdrag.list.classList.add('reorder-active');
+    rdragTrack(rdrag.y0);
+    if (navigator.vibrate) { try { navigator.vibrate(10); } catch (err) { /* noop */ } }
+  }
+  function rdragTrack(y) {
+    rdrag.wrap.style.transform = `translateY(${y - rdrag.y0}px)`;
+    const others = [...rdrag.list.querySelectorAll('.task-row-wrap')].filter((w) => w !== rdrag.wrap);
+    let t = others.length;
+    for (let k = 0; k < others.length; k++) {
+      const r = others[k].getBoundingClientRect();
+      if (y < r.top + r.height / 2) { t = k; break; }
+    }
+    rdrag.others = others; rdrag.target = t;
+    others.forEach((w) => w.classList.remove('drop-before', 'drop-after'));
+    if (others.length) (t < others.length ? others[t] : others[others.length - 1]).classList.add(t < others.length ? 'drop-before' : 'drop-after');
+  }
+  function rdragFinish(commit) {
+    const wasActive = rdrag.active;
+    let newIds = null;
+    if (wasActive && commit && rdrag.others.length) {
+      newIds = rdrag.others.map((w) => w.dataset.taskWrap);
+      newIds.splice(Math.max(0, Math.min(rdrag.target, newIds.length)), 0, rdrag.id);
+      if (newIds.join() === rdrag.ids.join()) newIds = null; // 元の位置に戻しただけなら何もしない
+    }
+    clearTimeout(rdrag.timer);
+    if (rdrag.wrap) { rdrag.wrap.classList.remove('reorder-src'); rdrag.wrap.style.transform = ''; }
+    if (rdrag.list) rdrag.list.classList.remove('reorder-active');
+    $$('.task-row-wrap.drop-before, .task-row-wrap.drop-after').forEach((w) => w.classList.remove('drop-before', 'drop-after'));
+    rdrag.sum = null; rdrag.wrap = null; rdrag.list = null; rdrag.pending = false; rdrag.active = false; rdrag.pid = -1; rdrag.tid = -1;
+    if (wasActive) rdrag.swallowUntil = Date.now() + 450; // ドラッグ直後の click で行が開閉しないように飲み込む
+    if (newIds) { applyManualOrder(newIds); rerender(); }
+  }
+  const rdragMovedOff = (x, y) => Math.abs(x - rdrag.x0) > 8 || Math.hypot(x - rdrag.x0, y - rdrag.y0) > 10; // 横はスワイプ、素早い移動はスクロールに譲る
+  // マウス：ハンドルは即開始、それ以外は長押しで開始
+  document.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'touch' || e.button !== 0 || rdrag.pending) return;
+    const sum = e.target.closest && e.target.closest('.task-row > summary');
+    if (!sum || !rdragOk(sum)) return;
+    rdragSetup(sum, e.clientX, e.clientY);
+    rdrag.pid = e.pointerId;
+    if (e.target.closest('[data-drag-handle]')) rdragActivate();
+    else rdrag.timer = setTimeout(rdragActivate, 320);
+  }, { passive: true });
+  document.addEventListener('pointermove', (e) => {
+    if (!rdrag.pending || e.pointerId !== rdrag.pid) return;
+    if (!rdrag.active) { if (rdragMovedOff(e.clientX, e.clientY)) rdragCancelPending(); return; }
+    rdragTrack(e.clientY);
+  }, { passive: true });
+  document.addEventListener('pointerup', (e) => { if (rdrag.pending && e.pointerId === rdrag.pid) rdragFinish(true); }, { passive: true });
+  document.addEventListener('pointercancel', (e) => { if (rdrag.pending && e.pointerId === rdrag.pid) rdragFinish(false); }, { passive: true });
+  // タッチ：マトリクス版と同じく touch イベントで追う（長押し成立後のみ preventDefault でスクロールを止める）
+  document.addEventListener('touchstart', (e) => {
+    if (rdrag.pending || e.touches.length !== 1) return;
+    const sum = e.target.closest && e.target.closest('.task-row > summary');
+    if (!sum || !rdragOk(sum)) return;
+    if (e.target.closest('button, a, input, select, textarea, label')) return; // summary 内の操作部品からは始めない
+    const t = e.touches[0];
+    rdragSetup(sum, t.clientX, t.clientY);
+    rdrag.tid = t.identifier;
+    if (e.target.closest('[data-drag-handle]')) rdragActivate();
+    else rdrag.timer = setTimeout(rdragActivate, 320);
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (!rdrag.pending) return;
+    const t = [...e.touches].find((x) => x.identifier === rdrag.tid);
+    if (!t) return;
+    if (!rdrag.active) { if (rdragMovedOff(t.clientX, t.clientY)) rdragCancelPending(); return; }
+    e.preventDefault();
+    rdragTrack(t.clientY);
+  }, { passive: false });
+  document.addEventListener('touchend', (e) => { if (rdrag.pending && ![...e.touches].some((x) => x.identifier === rdrag.tid)) rdragFinish(true); });
+  document.addEventListener('touchcancel', () => { if (rdrag.pending) rdragFinish(false); });
+  document.addEventListener('click', (e) => { // capture：既存の委譲 click ハンドラより先に判定する
+    if (Date.now() < rdrag.swallowUntil && e.target.closest && e.target.closest('.task-row-wrap')) { e.preventDefault(); e.stopPropagation(); }
+  }, true);
+  document.addEventListener('contextmenu', (e) => {
+    if (rdrag.active && e.target.closest && e.target.closest('.task-row-wrap')) e.preventDefault();
+  });
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && e.target.matches('form[data-form=aiChat] textarea') && window.matchMedia('(pointer: fine)').matches) { e.preventDefault(); e.target.form.requestSubmit(); return; }
     if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role=button][data-action]')) { e.preventDefault(); e.target.click(); }

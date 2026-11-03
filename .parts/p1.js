@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.8.5';
+  const APP_VERSION = '1.8.7';
   // カテゴリは「プライベート」「仕事」の2択に固定（v1.8.0）。読み込み時に normCategory で寄せる
   const CATEGORIES = ['プライベート', '仕事'];
   const DEFAULT_CATEGORIES = CATEGORIES;
@@ -134,6 +134,7 @@
       sourceKey: i.sourceKey || '',
       reminderList: i.reminderList || '',
       sample: i.sample || '',
+      ord: (typeof i.ord === 'number' && isFinite(i.ord)) ? i.ord : null, // v1.8.7：TASK一覧の手動並び順（小さいほど上。未割当は null）
     };
   }
   function normLesson(l) {
@@ -322,8 +323,33 @@
     i.updatedAt = nowIso();
     if (progress) i.lastProgressAt = i.updatedAt;
   }
+  // ── v1.8.7：TASK一覧の手動並び順 ──
+  // 順番は各アイテムの ord（小さいほど上）で保持し、state ごと保存・同期される。ord 未割当（null）は
+  // 割当済みの後ろに更新順で並ぶ。初回のドラッグで全アイテムに連番（0,1,2,…）が振られ、以後は常に全件割当済みになる。
+  const itemOrd = (i) => (typeof i.ord === 'number' && isFinite(i.ord)) ? i.ord : null;
+  function compareManual(a, b) {
+    const oa = itemOrd(a), ob = itemOrd(b);
+    if (oa != null && ob != null) return oa - ob || b.updatedAt.localeCompare(a.updatedAt);
+    if (oa != null) return -1;
+    if (ob != null) return 1;
+    return b.updatedAt.localeCompare(a.updatedAt);
+  }
+  // フィルタ表示中の並び替えを全体の手動順へ反映する：見えているアイテムは「いま占めている位置」の
+  // 中だけで入れ替え、隠れているアイテムの位置はそのまま保つ。最後に全体へ連番を振り直して保存する。
+  function applyManualOrder(visibleIds) {
+    const seq = [...state.items].sort(compareManual); // 現在の手動順（全件）
+    const vis = new Set(visibleIds);
+    const queue = visibleIds.map((id) => getItem(id)).filter(Boolean);
+    let k = 0;
+    // 見えている位置には新しい可視順序を、隠れた位置には元のアイテムを置き、全体へ連番を振る
+    seq.map((it) => (vis.has(it.id) && k < queue.length ? queue[k++] : it)).forEach((it, idx) => { it.ord = idx; });
+    save();
+  }
   function addItem(data) {
     const it = normItem({ ...data, id: uid(), createdAt: nowIso(), updatedAt: nowIso() });
+    // v1.8.7：手動順が既にある場合は先頭に入れる（TASK一覧の手動表示で一番上に出る）
+    const minOrd = state.items.reduce((m, x) => { const v = itemOrd(x); return v != null && (m == null || v < m) ? v : m; }, null);
+    if (minOrd != null) it.ord = minOrd - 1;
     state.items.unshift(it);
     syncTaskCountdown(it); // v1.8.3：期限つきで作ったらカウントダウンにも出す
     save();
@@ -342,7 +368,7 @@
 
   // ───────────────────────── UI の一時状態 ─────────────────────────
   const ui = {
-    wish: { cat: '', imp: '', tf: '', status: 'open', due: '', sort: 'updated' }, // TASK画面のフィルター（期限はすべて、状態の既定は未完了のみ v1.7.1。ui はメモリ上のみで保存されないため、既定変更は更新した端末でそのまま効く）
+    wish: { cat: '', imp: '', tf: '', status: 'open', due: '', sort: 'manual' }, // TASK画面のフィルター（期限はすべて、状態の既定は未完了のみ v1.7.1。並びの既定は手動 v1.8.7。ui はメモリ上のみで保存されないため、既定変更は更新した端末でそのまま効く）
     laterSort: 'updated',
     matrixFilter: 'all',
     journalQuery: '',

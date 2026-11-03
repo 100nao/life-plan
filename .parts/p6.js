@@ -127,6 +127,7 @@
     openDrawer: () => openDrawer(),
     closeDrawer: () => closeDrawer(),
     habitToggle: (d) => toggleHabitDay(d.id, d.date),
+    nextQuote: () => nextQuote(),
     habitMark: (d) => markHabitDay(d.id, d.mark, d.date),
     habitCycle: (d) => cycleHabitDay(d.id, d.date),
     forceUpdate: () => { closeDrawer(); forceUpdate(); },

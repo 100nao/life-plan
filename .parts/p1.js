@@ -4,7 +4,7 @@
 (() => {
   // ───────────────────────── 定数 ─────────────────────────
   const STORE_KEY = 'lifeplan.v1';
-  const APP_VERSION = '1.8.4';
+  const APP_VERSION = '1.8.5';
   // カテゴリは「プライベート」「仕事」の2択に固定（v1.8.0）。読み込み時に normCategory で寄せる
   const CATEGORIES = ['プライベート', '仕事'];
   const DEFAULT_CATEGORIES = CATEGORIES;
@@ -102,7 +102,7 @@
 
   // ───────────────────────── 保存 ─────────────────────────
   function defaultState() {
-    return { schema: 2, categories: [...DEFAULT_CATEGORIES], categoriesAt: '', items: [], lessons: [], journal: [], coachNotes: [], habits: [], aiAnalyses: [], aiSuggestions: [], countdowns: [], gcalDeletes: [], focus: {}, focusAt: {}, deleted: {}, settings: { theme: 'auto', bg: 'mist' } };
+    return { schema: 2, categories: [...DEFAULT_CATEGORIES], categoriesAt: '', items: [], lessons: [], journal: [], coachNotes: [], habits: [], aiAnalyses: [], aiSuggestions: [], countdowns: [], gcalDeletes: [], focus: {}, focusAt: {}, deleted: {}, settings: { theme: 'auto', bg: 'mist', quote: -1 } };
   }
   function normStep(s) {
     if (typeof s === 'string') s = { text: s };
@@ -262,7 +262,7 @@
     s.focusAt = raw.focusAt && typeof raw.focusAt === 'object' ? { ...raw.focusAt } : {};
     s.deleted = raw.deleted && typeof raw.deleted === 'object' ? { ...raw.deleted } : {};
     s.categoriesAt = String(raw.categoriesAt || '');
-    s.settings = { theme: ['auto', 'light', 'dark'].includes(raw.settings && raw.settings.theme) ? raw.settings.theme : 'auto', bg: BACKGROUNDS[raw.settings && raw.settings.bg] ? raw.settings.bg : 'mist' };
+    s.settings = { theme: ['auto', 'light', 'dark'].includes(raw.settings && raw.settings.theme) ? raw.settings.theme : 'auto', bg: BACKGROUNDS[raw.settings && raw.settings.bg] ? raw.settings.bg : 'mist', quote: Number.isInteger(raw.settings && raw.settings.quote) ? raw.settings.quote : -1 }; // quote は v1.8.5 の名言カードで前回表示した番号
     return s;
   }
   function load() {

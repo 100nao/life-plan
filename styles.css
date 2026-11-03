@@ -797,6 +797,14 @@ body.drawer-open .main, body.drawer-open .topbar { transform: translateX(min(10v
 .ze-imgs img { width: 40px; height: 40px; margin-right: -10px; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .12)); }
 .ze-imgs img:last-child { margin-right: 0; }
 .habit-empty { text-align: center; padding: 24px 18px; }
+/* v1.8.5：週間スタンプ上部の名言カード */
+.quote-card { text-align: center; padding: 20px 20px 12px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.quote-card:active { transform: scale(.99); }
+.quote-text { font-size: 15.5px; font-weight: 600; line-height: 1.75; margin: 0; }
+.quote-text::before { content: '“ '; color: var(--accent); font-weight: 700; }
+.quote-text::after { content: ' ”'; color: var(--accent); font-weight: 700; }
+.quote-author { margin: 8px 0 0; font-size: 12.5px; color: var(--muted); }
+.quote-hint { margin: 8px 0 0; font-size: 10.5px; color: var(--muted); opacity: .7; }
 .habit-empty img { width: 150px; height: 150px; object-fit: contain; animation: pomuFloat 4s ease-in-out infinite; }
 .habit-empty h3 { font-size: 17px; margin: 6px 0; }
 

@@ -778,7 +778,7 @@ with sync_playwright() as p:
     def dd(n): return (TD - datetime.timedelta(days=n)).isoformat()
     def pomu(done, start, today=None):
         return pg.evaluate("([d, s, t]) => LifePlan.pomu({id: 'x', name: 't', startDate: s, done: d}, t)", [done, start, today or TD.isoformat()])
-    check('バージョン 1.8.4', S(pg, 'LifePlan.version') == '1.8.4')
+    check('バージョン 1.8.5', S(pg, 'LifePlan.version') == '1.8.5')
     check('習慣：state.habits が配列', S(pg, 'Array.isArray(LifePlan.state.habits)'))
     # ぽむのルール
     r = pomu([], dd(0)); check('ぽむ：0日はたまご（stage-1）', r['key'] == 'stage-1' and r['lv'] == 1, r)
@@ -1065,7 +1065,7 @@ with sync_playwright() as p:
     db = pg.locator('#drawer').bounding_box()
     check('スワイプ：右から左へなぞるとメニューが開く', is_open() and pg.is_visible('#drawerBackdrop'))
     check('スワイプ：メニューは右側から出る', db and abs(db['x'] + db['width'] - 390) <= 2 and db['x'] > 30, db)
-    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.8.4' in pg.inner_text('#drawer [data-action=forceUpdate]'))
+    check('メニュー：「アップデート」ボタン', pg.locator('#drawer [data-action=forceUpdate]').is_visible() and 'アップデート' in pg.inner_text('#drawer [data-action=forceUpdate]') and '1.8.5' in pg.inner_text('#drawer [data-action=forceUpdate]'))
     shot(pg, 'v131_menu.png')
     swipe(90, 500, 330, 505)
     check('スワイプ：左から右へで閉じる', not is_open())
@@ -2124,6 +2124,28 @@ with sync_playwright() as p:
     dp.click('form[data-form=item] [data-action=deleteItem]'); wait_idle(dp, 400)
     check('v1.8.3：タスク削除でカウントダウンも消える・手動分は残る', S(dp, f"LifePlan.state.countdowns.some(c => c.cdTaskId === '{nitem['id']}')") is False and S(dp, "LifePlan.state.countdowns.some(c => c.id === 'd_manual')") is True)
     dc.close()
+
+    # ── v1.8.5：週間スタンプ上部の名言カード（内蔵リスト・開くたびに変化・タップで切替）──
+    qc = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2, locale='ja-JP', timezone_id='Asia/Tokyo', service_workers='block')
+    qp = qc.new_page(); qp.on('pageerror', lambda e: errors.append('QUOTE ' + str(e)))
+    qp.goto(URL); qp.evaluate("location.hash = '#habits'"); wait_idle(qp, 600)
+    q1 = S(qp, "(() => { const c = document.querySelector('.quote-card'); return c ? { text: c.querySelector('.quote-text').textContent.trim(), author: c.querySelector('.quote-author').textContent.trim() } : null; })()")
+    check('v1.8.5：週間スタンプの上部に名言カードが出る（本文＋著者）', q1 and q1['text'] and q1['author'].startswith('—'), q1)
+    check('v1.8.5：名言カードは画面の一番上（最初のカード）', S(qp, "document.querySelector('#main .card') === document.querySelector('.quote-card')"))
+    inlist = S(qp, f"fetch('app.js').then(r => r.text()).then(t => t.includes({json.dumps(q1['text'], ensure_ascii=False)}) && t.includes({json.dumps(q1['author'][1:].strip(), ensure_ascii=False)}))") if q1 else False
+    check('v1.8.5：表示中の名言は内蔵リスト（app.js）のものと一致', inlist is True)
+    check('v1.8.5：前回の名言番号が settings に保存される', isinstance(S(qp, 'LifePlan.state.settings.quote'), int) and S(qp, 'LifePlan.state.settings.quote') >= 0)
+    qp.evaluate("location.hash = '#matrix'"); wait_idle(qp, 400)
+    check('v1.8.5：他のタブには名言カードが出ない', qp.locator('.quote-card').count() == 0)
+    qp.evaluate("location.hash = '#habits'"); wait_idle(qp, 400)
+    check('v1.8.5：同じ起動中は再描画しても名言が変わらない', S(qp, "document.querySelector('.quote-text').textContent.trim()") == q1['text'])
+    qp.click('.quote-card'); wait_idle(qp, 400)
+    q2text = S(qp, "document.querySelector('.quote-text').textContent.trim()")
+    check('v1.8.5：カードをタップすると別の名言に切り替わる', q2text != q1['text'], (q1['text'], q2text))
+    qp.reload(); wait_idle(qp, 600)
+    q3text = S(qp, "document.querySelector('.quote-text') ? document.querySelector('.quote-text').textContent.trim() : ''")
+    check('v1.8.5：開き直す（再読み込み）と前回と違う名言になる', q3text != '' and q3text != q2text, (q2text, q3text))
+    qc.close()
     # ── PC ──
     state_dump = pg.evaluate("localStorage.getItem('lifeplan.v1')")
     # ── Service Worker・オフライン（別コンテキスト：同期のモックと分けるため）──
@@ -2149,7 +2171,7 @@ with sync_playwright() as p:
     nav = sp.evaluate("performance.getEntriesByType('navigation')[0].name")
     check('アップデート：?v=<時刻> で読み込み直す', re.search(r'[?&]v=\d{10,}', nav) is not None and sp.evaluate('window.__beforeUpdate') is None, nav)
     check('アップデート：古いキャッシュを削除', 'lifeplan-old-test' not in sp.evaluate('caches.keys()'))
-    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.8.4' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
+    check('アップデート：読み込み後は URL から ?v= を消してバージョンを表示', 'v=' not in sp.evaluate('location.search') and '1.8.5' in sp.inner_text('#toast') and sp.evaluate('LifePlan.state.items.length') > 0, sp.inner_text('#toast'))
     check('アップデート：Service Worker は引き続き有効', sp.evaluate("navigator.serviceWorker.getRegistration().then(r => !!(r && r.active))"))
     swc.set_offline(True)
     sp.reload(); wait_idle(sp, 1200)

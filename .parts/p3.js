@@ -452,11 +452,76 @@
       <button class="stamp-btn ${i.doneToday ? 'on' : i.missedToday ? 'is-x' : ''}" data-action="habitToggle" data-id="${h.id}" aria-pressed="${i.doneToday}" aria-label="${esc(h.name)}：${i.doneToday ? '今日のスタンプを取り消す' : '今日のスタンプを押す'}">${i.missedToday ? STAMP_XM : STAMP_O}<span>${i.doneToday ? '済' : i.missedToday ? '' : '押す'}</span></button>
     </div>`;
   }
+  // ── v1.8.5：週間スタンプ上部の名言カード（内蔵リストのみ・外部通信なし） ──
+  const QUOTES = [
+    { t: '天才とは、1％のひらめきと99％の努力である', a: 'トーマス・エジソン' },
+    { t: '失敗したことがない人は、新しいことに挑戦したことがない人だ', a: 'アルベルト・アインシュタイン' },
+    { t: '想像力は知識より大切だ', a: 'アルベルト・アインシュタイン' },
+    { t: '人生は自転車のようなもの。バランスを保つには、走り続けなければならない', a: 'アルベルト・アインシュタイン' },
+    { t: 'すべての困難の中に、チャンスがある', a: 'アルベルト・アインシュタイン' },
+    { t: '明日死ぬかのように生きよ。永遠に生きるかのように学べ', a: 'マハトマ・ガンジー' },
+    { t: '成功とは、情熱を失わずに失敗を繰り返すことだ', a: 'ウィンストン・チャーチル' },
+    { t: 'ハングリーであれ。愚か者であれ', a: 'スティーブ・ジョブズ' },
+    { t: '偉大な仕事をする唯一の方法は、自分の仕事を愛することだ', a: 'スティーブ・ジョブズ' },
+    { t: '夢なき者に理想なし、理想なき者に計画なし、計画なき者に実行なし、実行なき者に成功なし', a: '吉田松陰' },
+    { t: '世に生を得るは、事を成すにあり', a: '坂本龍馬' },
+    { t: '天は人の上に人を造らず、人の下に人を造らず', a: '福沢諭吉' },
+    { t: '千里の道も一歩から', a: '老子' },
+    { t: '為せば成る、為さねば成らぬ何事も', a: '上杉鷹山' },
+    { t: '小さいことを積み重ねることが、とんでもないところへ行くただひとつの道', a: 'イチロー' },
+    { t: '壁は、どれだけ本気でそれを望んでいるかを証明するためにある', a: 'ランディ・パウシュ' },
+    { t: '何事も、成し遂げるまでは不可能に見える', a: 'ネルソン・マンデラ' },
+    { t: '教育は、世界を変えるために使える最強の武器である', a: 'ネルソン・マンデラ' },
+    { t: '未来とは、今である', a: 'マーガレット・ミード' },
+    { t: '幸せだから笑うのではない。笑うから幸せなのだ', a: 'ウィリアム・ジェームズ' },
+    { t: '努力は必ず報われる。もし報われない努力があるとすれば、それはまだ努力と呼べない', a: '王貞治' },
+    { t: '強い者が勝つのではない。勝った者が強いのだ', a: 'フランツ・ベッケンバウアー' },
+    { t: '初心忘るべからず', a: '世阿弥' },
+    { t: '温故知新', a: '孔子' },
+    { t: '学ぶことをやめた者は老人だ。20歳であろうと80歳であろうと', a: 'ヘンリー・フォード' },
+    { t: '夢をかなえる秘訣は、好奇心・自信・勇気・継続の4つ', a: 'ウォルト・ディズニー' },
+    { t: 'リスクを取らないことが、一番のリスクだ', a: 'マーク・ザッカーバーグ' },
+    { t: '幸運とは、準備がチャンスに出会うこと', a: 'セネカ' },
+    { t: '知識への投資は、常に最高の利子を生む', a: 'ベンジャミン・フランクリン' },
+    { t: '人生は、勇気次第で縮んだり広がったりする', a: 'アナイス・ニン' },
+    { t: '行動が、すべての成功の鍵だ', a: 'パブロ・ピカソ' },
+    { t: '努力する人は希望を語り、怠ける人は不満を語る', a: '井上靖' },
+    { t: '人生に失敗がないと、人生を失敗する', a: '斎藤茂太' },
+  ];
+  let quoteSession = -1; // この起動中に表示している名言（再描画では変えない。開き直すたびに選び直す）
+  function pickQuoteIdx(except) {
+    if (QUOTES.length < 2) return 0;
+    let i = Math.floor(Math.random() * QUOTES.length);
+    while (i === except) i = Math.floor(Math.random() * QUOTES.length);
+    return i;
+  }
+  function currentQuoteIdx() {
+    if (quoteSession < 0) {
+      quoteSession = pickQuoteIdx(state.settings.quote); // 前回表示した名言は連続で出さない
+      state.settings.quote = quoteSession;
+      saveLocal();
+    }
+    return quoteSession;
+  }
+  function nextQuote() {
+    quoteSession = pickQuoteIdx(quoteSession >= 0 ? quoteSession : state.settings.quote);
+    state.settings.quote = quoteSession;
+    saveLocal();
+    rerender();
+  }
+  function quoteCard() {
+    const q = QUOTES[currentQuoteIdx()];
+    return `<section class="card quote-card" data-action="nextQuote" role="button" tabindex="0" aria-label="今日の名言。タップすると別の名言を表示します">
+      <p class="quote-text">${esc(q.t)}</p>
+      <p class="quote-author">— ${esc(q.a)}</p>
+      <p class="quote-hint" aria-hidden="true">タップでもうひとつ</p>
+    </section>`;
+  }
   function viewHabits(arg) {
     checkPomuChanges();
     if (arg === 'zukan') return viewZukan();
     if (arg) return viewHabit(arg);
-    const out = [sectionHead('習慣スタンプ', '毎日の目標に〇をつけよう。続けるほど、ぽむが育ちます。', '<button class="btn primary small" data-action="editHabit">＋ 追加</button>')];
+    const out = [quoteCard(), sectionHead('習慣スタンプ', '毎日の目標に〇をつけよう。続けるほど、ぽむが育ちます。', '<button class="btn primary small" data-action="editHabit">＋ 追加</button>')];
     if (!state.habits.length) {
       out.push(`<section class="card habit-empty"><img src="${pomuImg('stage-1')}" alt="ぽむたま" width="512" height="512"><h3>まだ目標がありません</h3>
         <p class="muted">「英語5分」「ストレッチ」など、毎日つづけたいことを1つ決めましょう。スタンプを押すたびに、たまごの「ぽむ」が育っていきます。</p>
